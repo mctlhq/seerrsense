@@ -53,7 +53,8 @@ export const SeerrResultItemSchema = z.object({
   originalName: z.string().optional(),
   releaseDate: z.string().optional(),
   firstAirDate: z.string().optional(),
-  posterPath: z.string().optional(),
+  backdropPath: z.string().nullable().optional(),
+  posterPath: z.string().nullable().optional(),
   overview: z.string().optional(),
   mediaInfo: SeerrMediaInfoSchema
 }).passthrough();
