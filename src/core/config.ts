@@ -11,6 +11,8 @@ const ConfigSchema = z.object({
   PORT: z.coerce.number().default(8787),
   NEBIUS_API_KEY: z.string().min(1).optional(),
   NEBIUS_MODEL: z.string().optional(),
+  CF_ACCESS_CLIENT_ID: z.string().optional(),
+  CF_ACCESS_CLIENT_SECRET: z.string().optional(),
 });
 
 export type Config = z.infer<typeof ConfigSchema>;
