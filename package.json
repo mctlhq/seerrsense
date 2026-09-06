@@ -1,8 +1,8 @@
 {
   "name": "seerrsense",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "AI companion for Seerr — natural-language media discovery, resolution, and MCP automation.",
-  "license": "MIT",
+  "license": "ISC",
   "main": "index.js",
   "directories": {
     "test": "tests"
@@ -16,7 +16,6 @@
   },
   "keywords": [],
   "author": "",
-  "license": "ISC",
   "type": "module",
   "dependencies": {
     "@ai-sdk/openai-compatible": "^3.0.44",
