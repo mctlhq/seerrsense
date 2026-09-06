@@ -21,7 +21,7 @@ export function buildServer() {
   // Auth preHandler
   fastify.addHook("preHandler", async (request, reply) => {
     // Skip auth for health/ready
-    if (request.url === "/health" || request.url === "/ready") return;
+    if (request.url === "/health" || request.url === "/ready" || request.url === "/healthz" || request.url === "/readyz") return;
     
     // Check Authorization header against required config token
     const expectedToken = config.SEERRSENSE_AUTH_TOKEN;
