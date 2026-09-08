@@ -1,6 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { SeerrClient } from "../src/providers/seerr/client.js";
-import { config } from "../src/core/config.js";
 
 global.fetch = vi.fn();
 
@@ -89,23 +88,51 @@ describe("SeerrClient", () => {
       return { ok: true, json: async () => ({ results: [] }) };
     });
 
-    const saved = { id: config.CF_ACCESS_CLIENT_ID, secret: config.CF_ACCESS_CLIENT_SECRET };
-    try {
-      config.CF_ACCESS_CLIENT_ID = undefined;
-      config.CF_ACCESS_CLIENT_SECRET = undefined;
-      await client.search("x");
-      expect(captured[0]).not.toHaveProperty("CF-Access-Client-Id");
-      expect(captured[0]).not.toHaveProperty("CF-Access-Client-Secret");
+    // Cloudflare Access is a property of one Seerr, not of the process: one
+    // person's instance sits behind Zero Trust and another's does not.
+    await new SeerrClient({ baseUrl: "http://fake", apiKey: "key" }).search("x");
+    expect(captured[0]).not.toHaveProperty("CF-Access-Client-Id");
+    expect(captured[0]).not.toHaveProperty("CF-Access-Client-Secret");
 
-      config.CF_ACCESS_CLIENT_ID = "cf-id";
-      config.CF_ACCESS_CLIENT_SECRET = "cf-secret";
-      await client.search("x");
-      expect(captured[1]["CF-Access-Client-Id"]).toBe("cf-id");
-      expect(captured[1]["CF-Access-Client-Secret"]).toBe("cf-secret");
-      expect(captured[1]["X-Api-Key"]).toBe("key");
-    } finally {
-      config.CF_ACCESS_CLIENT_ID = saved.id;
-      config.CF_ACCESS_CLIENT_SECRET = saved.secret;
-    }
+    await new SeerrClient({
+      baseUrl: "http://fake",
+      apiKey: "key",
+      cfAccessClientId: "cf-id",
+      cfAccessClientSecret: "cf-secret",
+    }).search("x");
+    expect(captured[1]["CF-Access-Client-Id"]).toBe("cf-id");
+    expect(captured[1]["CF-Access-Client-Secret"]).toBe("cf-secret");
+    expect(captured[1]["X-Api-Key"]).toBe("key");
   });
+
+  it("files a request as the person who asked when a user id is known", async () => {
+    let body: any;
+    (global.fetch as any).mockImplementation(async (_url: string, options: any) => {
+      body = JSON.parse(options.body);
+      return { ok: true, json: async () => ({ success: true }) };
+    });
+
+    await client.requestMedia("movie", 27205);
+    expect(body.userId).toBeUndefined();
+
+    await client.requestMedia("movie", 27205, undefined, 42);
+    expect(body.userId).toBe(42);
+  });
+
+  it("looks up a Seerr user by email, case-insensitively", async () => {
+    (global.fetch as any).mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        results: [
+          { id: 1, email: "someone@example.com" },
+          { id: 7, email: "Owner@Example.com" },
+        ],
+      }),
+    });
+
+    expect(await client.findUserIdByEmail("owner@example.com")).toBe(7);
+    expect(await client.findUserIdByEmail("nobody@example.com")).toBeUndefined();
+    expect(await client.findUserIdByEmail("")).toBeUndefined();
+  });
+
 });

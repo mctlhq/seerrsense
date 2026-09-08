@@ -1,5 +1,5 @@
 import pg from "pg";
-import type { AuthStore, AuthCode, PendingAuth, RefreshRecord } from "./store.js";
+import type { AuthStore, AuthCode, PendingAuth, RefreshRecord, UserConnection } from "./store.js";
 
 /** Arbitrary but fixed: the key two pods agree on while creating the schema. */
 const SCHEMA_LOCK_ID = 8_787_004_2;
@@ -51,6 +51,16 @@ const SCHEMA_SQL = `
         consumed_at BIGINT
       );
       CREATE INDEX IF NOT EXISTS oauth_refresh_family ON oauth_refresh_tokens (family_id);
+      CREATE TABLE IF NOT EXISTS user_connections (
+        subject                   TEXT PRIMARY KEY,
+        email                     TEXT   NOT NULL,
+        seerr_url                 TEXT   NOT NULL,
+        seerr_api_key_sealed      TEXT   NOT NULL,
+        locale                    TEXT,
+        cf_access_id_sealed       TEXT,
+        cf_access_secret_sealed   TEXT,
+        updated_at                BIGINT NOT NULL
+      );
     `;
 
 /**
@@ -211,6 +221,47 @@ export class PostgresAuthStore implements AuthStore {
     await this.pool.query(`DELETE FROM oauth_pending_auth WHERE expires_at < $1`, [now]);
     await this.pool.query(`DELETE FROM oauth_auth_codes WHERE expires_at < $1`, [now]);
     await this.pool.query(`DELETE FROM oauth_refresh_tokens WHERE expires_at < $1`, [now]);
+    // user_connections is not swept here on purpose — see the note on the type.
+  }
+
+  async getUserConnection(subject: string): Promise<UserConnection | undefined> {
+    const { rows } = await this.pool.query(
+      `SELECT * FROM user_connections WHERE subject = $1`, [subject]);
+    const row = rows[0];
+    if (!row) return undefined;
+    return {
+      subject: row.subject,
+      email: row.email,
+      seerrUrl: row.seerr_url,
+      seerrApiKeySealed: row.seerr_api_key_sealed,
+      locale: row.locale ?? undefined,
+      cfAccessClientIdSealed: row.cf_access_id_sealed ?? undefined,
+      cfAccessClientSecretSealed: row.cf_access_secret_sealed ?? undefined,
+      updatedAt: Number(row.updated_at),
+    };
+  }
+
+  async putUserConnection(c: UserConnection): Promise<void> {
+    await this.pool.query(
+      `INSERT INTO user_connections
+         (subject, email, seerr_url, seerr_api_key_sealed, locale, cf_access_id_sealed,
+          cf_access_secret_sealed, updated_at)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8)
+       ON CONFLICT (subject) DO UPDATE SET
+         email = EXCLUDED.email,
+         seerr_url = EXCLUDED.seerr_url,
+         seerr_api_key_sealed = EXCLUDED.seerr_api_key_sealed,
+         locale = EXCLUDED.locale,
+         cf_access_id_sealed = EXCLUDED.cf_access_id_sealed,
+         cf_access_secret_sealed = EXCLUDED.cf_access_secret_sealed,
+         updated_at = EXCLUDED.updated_at`,
+      [c.subject, c.email, c.seerrUrl, c.seerrApiKeySealed, c.locale ?? null,
+       c.cfAccessClientIdSealed ?? null, c.cfAccessClientSecretSealed ?? null, c.updatedAt],
+    );
+  }
+
+  async deleteUserConnection(subject: string): Promise<void> {
+    await this.pool.query(`DELETE FROM user_connections WHERE subject = $1`, [subject]);
   }
 
   async close(): Promise<void> {

@@ -7,7 +7,9 @@ dotenv.config({ quiet: true });
 
 const ConfigSchema = z.object({
   SEERR_URL: z.string().url().default("http://127.0.0.1:5055"),
-  SEERR_API_KEY: z.string().min(1, "SEERR_API_KEY is required"),
+  // Optional since a signed-in person can attach their own Seerr. Without it
+  // there is simply no household instance to fall back on.
+  SEERR_API_KEY: z.string().min(1).optional(),
   SEERRSENSE_LOCALE: z.string().default("en-US"),
   // Required for the HTTP server (enforced by assertHttpConfig), not for stdio mode
   // where the MCP client owns the process and there is no network surface.
@@ -17,6 +19,8 @@ const ConfigSchema = z.object({
   NEBIUS_MODEL: z.string().optional(),
   CF_ACCESS_CLIENT_ID: z.string().optional(),
   CF_ACCESS_CLIENT_SECRET: z.string().optional(),
+  // Read here too so the tools can point a person at the right account page.
+  SEERRSENSE_PUBLIC_URL: z.string().url().optional(),
 });
 
 export type Config = z.infer<typeof ConfigSchema>;

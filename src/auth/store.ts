@@ -53,6 +53,24 @@ export interface RefreshRecord {
   consumedAt?: number;
 }
 
+/**
+ * A person's own Seerr, keyed by the OAuth subject. The API key is stored
+ * sealed; nothing else here is secret.
+ *
+ * This is the one table whose contents cannot be recreated by asking the user
+ * to sign in again, so unlike the OAuth state it is never swept by purgeExpired.
+ */
+export interface UserConnection {
+  subject: string;
+  email: string;
+  seerrUrl: string;
+  seerrApiKeySealed: string;
+  locale?: string;
+  cfAccessClientIdSealed?: string;
+  cfAccessClientSecretSealed?: string;
+  updatedAt: number;
+}
+
 export interface AuthStore {
   init(): Promise<void>;
   putPendingAuth(pending: PendingAuth): Promise<void>;
@@ -67,6 +85,9 @@ export interface AuthStore {
   revokeFamily(familyId: string): Promise<void>;
   revokeToken(tokenHash: string): Promise<void>;
   purgeExpired(now?: number): Promise<void>;
+  getUserConnection(subject: string): Promise<UserConnection | undefined>;
+  putUserConnection(connection: UserConnection): Promise<void>;
+  deleteUserConnection(subject: string): Promise<void>;
   close(): Promise<void>;
 }
 
@@ -80,6 +101,7 @@ export class MemoryAuthStore implements AuthStore {
   private pending = new Map<string, PendingAuth>();
   private codes = new Map<string, AuthCode>();
   private refresh = new Map<string, RefreshRecord>();
+  private connections = new Map<string, UserConnection>();
 
   async init(): Promise<void> {}
 
@@ -132,12 +154,27 @@ export class MemoryAuthStore implements AuthStore {
     for (const [key, value] of this.pending) if (value.expiresAt < now) this.pending.delete(key);
     for (const [key, value] of this.codes) if (value.expiresAt < now) this.codes.delete(key);
     for (const [key, value] of this.refresh) if (value.expiresAt < now) this.refresh.delete(key);
+    // Connections are deliberately untouched: they do not expire, and losing one
+    // means a person's Seerr silently detaches.
+  }
+
+  async getUserConnection(subject: string): Promise<UserConnection | undefined> {
+    return this.connections.get(subject);
+  }
+
+  async putUserConnection(connection: UserConnection): Promise<void> {
+    this.connections.set(connection.subject, connection);
+  }
+
+  async deleteUserConnection(subject: string): Promise<void> {
+    this.connections.delete(subject);
   }
 
   async close(): Promise<void> {
     this.pending.clear();
     this.codes.clear();
     this.refresh.clear();
+    this.connections.clear();
   }
 }
 
