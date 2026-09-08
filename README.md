@@ -156,7 +156,16 @@ authorization server.
 - **Clients register through Client ID Metadata Documents**, where the
   `client_id` is an https URL naming a JSON document with the client's allowed
   redirect URIs. Pre-registered clients are supported too. Dynamic Client
-  Registration is deprecated in MCP 2026-07-28 and is not implemented.
+  Registration is deprecated in MCP 2026-07-28 and is not implemented; a client
+  that cannot use either path can be given a pre-registered entry instead.
+- **Redirect URIs match exactly, except for loopback**, where the port is
+  ignored as RFC 8252 requires — a native client binds an ephemeral port and
+  cannot declare it in advance. `localhost` and `127.0.0.1` stay distinct, and a
+  URI carrying userinfo is refused outright.
+- **One consent screen** names the client, the address you will be returned to
+  and what is being granted. It is what makes a loopback client distinguishable
+  from a local impostor, and it doubles as visible confirmation that the
+  connection worked.
 - **PKCE S256 is mandatory**, on both legs: one exchange with the client, a
   separate one with Google.
 - **Access tokens are short-lived HS256 JWTs** audienced at `<public url>/mcp`,
@@ -164,8 +173,10 @@ authorization server.
 - **Refresh tokens rotate.** They are stored hashed, and presenting one that was
   already rotated revokes the entire family, on the assumption that two parties
   now hold it.
-- **Scopes are `seerr:read` and `seerr:request`.** Only those two are
-  advertised, and `request_media` checks for `seerr:request` itself.
+- **Scopes are `seerr:read`, `seerr:request` and `offline_access`.** Only those
+  are advertised, because a scope advertised but not granted makes clients warn
+  the user about permissions on a token that works. `request_media` checks for
+  `seerr:request` itself.
 - The shared `SEERRSENSE_AUTH_TOKEN` keeps working during the migration and is
   compared in constant time. Turn it off with
   `SEERRSENSE_LEGACY_TOKEN_ENABLED=false`.

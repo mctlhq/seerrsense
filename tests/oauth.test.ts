@@ -42,7 +42,8 @@ async function stubFetch(input: any, init?: any): Promise<Response> {
   const json = (body: unknown, status = 200) =>
     new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json" } });
 
-  if (url === CLIENT_ID) return json(clientDocument);
+  // Serve whichever document the current test has staged, at its own URL.
+  if (url === CLIENT_ID || url === clientDocument.client_id) return json(clientDocument);
   if (url.startsWith("https://accounts.google.com/.well-known/openid-configuration")) {
     return json({
       issuer: "https://accounts.google.com",
@@ -120,18 +121,40 @@ async function getAuthorizationCode(app: any, options: { scope?: string; verifie
   lastGoogleNonce = googleUrl.searchParams.get("nonce") ?? undefined;
   const state = googleUrl.searchParams.get("state")!;
 
-  const callback = await app.inject({
+  const consent = await app.inject({
     method: "GET",
     url: "/oauth/google/callback",
     query: { code: "google-code", state },
   });
-  expect(callback.statusCode).toBe(302);
-  const back = new URL(callback.headers.location as string);
+  expect(consent.statusCode).toBe(200);
+  const back = new URL(await approveConsent(app, consent.payload));
   expect(back.searchParams.get("state")).toBe("client-state");
   expect(back.searchParams.get("iss")).toBe(ISSUER);
   const code = back.searchParams.get("code");
   expect(code).toBeTruthy();
   return { code: code!, verifier, googleUrl };
+}
+
+/** Pulls the handle out of the rendered consent form and answers it. */
+function consentHandle(html: string): string {
+  const match = html.match(/name="code" value="([^"]+)"/);
+  expect(match, "consent page carried no handle").toBeTruthy();
+  return match![1];
+}
+
+async function answerConsent(app: any, html: string, decision: "allow" | "deny") {
+  return app.inject({
+    method: "POST",
+    url: "/oauth/consent",
+    headers: { "content-type": "application/x-www-form-urlencoded" },
+    payload: new URLSearchParams({ code: consentHandle(html), decision }).toString(),
+  });
+}
+
+async function approveConsent(app: any, html: string): Promise<string> {
+  const response = await answerConsent(app, html, "allow");
+  expect(response.statusCode).toBe(302);
+  return response.headers.location as string;
 }
 
 /** The whole flow, ending with the token response. */
@@ -176,7 +199,7 @@ describe("discovery documents", () => {
       // CIMD is the registration path; DCR is deprecated and not offered.
       expect(body.client_id_metadata_document_supported).toBe(true);
       expect(body.registration_endpoint).toBeUndefined();
-      expect(body.scopes_supported).toEqual(["seerr:read", "seerr:request"]);
+      expect(body.scopes_supported).toEqual(["seerr:read", "seerr:request", "offline_access"]);
     }
     await app.close();
   });
@@ -356,7 +379,7 @@ describe("authorization code flow", () => {
       url: "/oauth/google/callback",
       query: { code: "google-code", state },
     });
-    expect(first.statusCode).toBe(302);
+    expect(first.statusCode).toBe(200);
     const second = await app.inject({
       method: "GET",
       url: "/oauth/google/callback",
@@ -514,6 +537,310 @@ describe("access token validation", () => {
     });
     expect(token.statusCode).toBe(400);
     expect(JSON.parse(token.payload).error).toBe("invalid_grant");
+    await app.close();
+  });
+});
+
+describe("consent", () => {
+  it("names the client and the redirect host before granting anything", async () => {
+    const app = await makeApp();
+    const authorize = await app.inject({
+      method: "GET",
+      url: "/oauth/authorize",
+      query: {
+        client_id: CLIENT_ID,
+        redirect_uri: REDIRECT_URI,
+        response_type: "code",
+        code_challenge: challengeFor(makeVerifier()),
+        code_challenge_method: "S256",
+        scope: "seerr:read seerr:request",
+      },
+    });
+    const googleUrl = new URL(authorize.headers.location as string);
+    lastGoogleNonce = googleUrl.searchParams.get("nonce") ?? undefined;
+    const consent = await app.inject({
+      method: "GET",
+      url: "/oauth/google/callback",
+      query: { code: "google-code", state: googleUrl.searchParams.get("state")! },
+    });
+
+    expect(consent.statusCode).toBe(200);
+    expect(consent.headers["content-type"]).toContain("text/html");
+    // The redirect host is what the MCP spec requires to be visible: a loopback
+    // client cannot be told apart from an impostor by anything else.
+    expect(consent.payload).toContain("127.0.0.1:33418");
+    expect(consent.payload).toContain("Test MCP Client");
+    expect(consent.payload).toContain(ALLOWED_EMAIL);
+    expect(consent.payload).toContain("Request new films");
+    // form-action must reach the client's host or the button does nothing.
+    expect(consent.headers["content-security-policy"]).toContain("form-action 'self' https:");
+    await app.close();
+  });
+
+  it("escapes a client name instead of rendering it", async () => {
+    const app = await makeApp();
+    clientDocument = {
+      client_id: CLIENT_ID,
+      client_name: '<img src=x onerror="alert(1)">',
+      redirect_uris: [REDIRECT_URI],
+    };
+    const authorize = await app.inject({
+      method: "GET",
+      url: "/oauth/authorize",
+      query: {
+        client_id: CLIENT_ID,
+        redirect_uri: REDIRECT_URI,
+        response_type: "code",
+        code_challenge: challengeFor(makeVerifier()),
+        code_challenge_method: "S256",
+      },
+    });
+    const googleUrl = new URL(authorize.headers.location as string);
+    lastGoogleNonce = googleUrl.searchParams.get("nonce") ?? undefined;
+    const consent = await app.inject({
+      method: "GET",
+      url: "/oauth/google/callback",
+      query: { code: "google-code", state: googleUrl.searchParams.get("state")! },
+    });
+    expect(consent.payload).not.toContain("<img src=x");
+    expect(consent.payload).toContain("&lt;img src=x");
+    clientDocument = { client_id: CLIENT_ID, client_name: "Test MCP Client", redirect_uris: [REDIRECT_URI] };
+    await app.close();
+  });
+
+  it("issues nothing when the person declines", async () => {
+    const app = await makeApp();
+    const authorize = await app.inject({
+      method: "GET",
+      url: "/oauth/authorize",
+      query: {
+        client_id: CLIENT_ID,
+        redirect_uri: REDIRECT_URI,
+        response_type: "code",
+        code_challenge: challengeFor(makeVerifier()),
+        code_challenge_method: "S256",
+        state: "client-state",
+      },
+    });
+    const googleUrl = new URL(authorize.headers.location as string);
+    lastGoogleNonce = googleUrl.searchParams.get("nonce") ?? undefined;
+    const consent = await app.inject({
+      method: "GET",
+      url: "/oauth/google/callback",
+      query: { code: "google-code", state: googleUrl.searchParams.get("state")! },
+    });
+
+    const denied = await answerConsent(app, consent.payload, "deny");
+    expect(denied.statusCode).toBe(302);
+    const back = new URL(denied.headers.location as string);
+    expect(back.searchParams.get("error")).toBe("access_denied");
+    expect(back.searchParams.get("code")).toBeNull();
+    expect(back.searchParams.get("state")).toBe("client-state");
+    await app.close();
+  });
+
+  it("answers a consent handle only once", async () => {
+    const app = await makeApp();
+    const authorize = await app.inject({
+      method: "GET",
+      url: "/oauth/authorize",
+      query: {
+        client_id: CLIENT_ID,
+        redirect_uri: REDIRECT_URI,
+        response_type: "code",
+        code_challenge: challengeFor(makeVerifier()),
+        code_challenge_method: "S256",
+      },
+    });
+    const googleUrl = new URL(authorize.headers.location as string);
+    lastGoogleNonce = googleUrl.searchParams.get("nonce") ?? undefined;
+    const consent = await app.inject({
+      method: "GET",
+      url: "/oauth/google/callback",
+      query: { code: "google-code", state: googleUrl.searchParams.get("state")! },
+    });
+
+    expect((await answerConsent(app, consent.payload, "allow")).statusCode).toBe(302);
+    const replay = await answerConsent(app, consent.payload, "allow");
+    expect(replay.statusCode).toBe(400);
+    await app.close();
+  });
+});
+
+describe("native clients", () => {
+  const LOOPBACK_CLIENT = "https://loopback.test/client.json";
+
+  it("accepts a loopback redirect on whatever port the client bound", async () => {
+    const app = await makeApp();
+    clientDocument = {
+      client_id: LOOPBACK_CLIENT,
+      client_name: "Claude Code",
+      // Exactly what Claude Code publishes: no port, both spellings.
+      redirect_uris: ["http://localhost/callback", "http://127.0.0.1/callback"],
+    };
+    for (const redirectUri of ["http://localhost:3118/callback", "http://127.0.0.1:51234/callback"]) {
+      const response = await app.inject({
+        method: "GET",
+        url: "/oauth/authorize",
+        query: {
+          client_id: LOOPBACK_CLIENT,
+          redirect_uri: redirectUri,
+          response_type: "code",
+          code_challenge: challengeFor(makeVerifier()),
+          code_challenge_method: "S256",
+        },
+      });
+      expect(response.statusCode, redirectUri).toBe(302);
+      expect(response.headers.location, redirectUri).toContain("accounts.google.com");
+    }
+    clientDocument = { client_id: CLIENT_ID, client_name: "Test MCP Client", redirect_uris: [REDIRECT_URI] };
+    await app.close();
+  });
+
+  it("does not let the port exception widen to path, host or scheme", async () => {
+    const app = await makeApp();
+    clientDocument = {
+      client_id: LOOPBACK_CLIENT,
+      client_name: "Claude Code",
+      redirect_uris: ["http://localhost/callback", "http://127.0.0.1/callback"],
+    };
+    const rejected = [
+      "http://localhost:3118/callback/../evil",
+      "http://localhost:3118/other",
+      "http://evil.test:3118/callback",
+      "https://localhost:3118/callback",
+      "http://127.0.0.1.evil.test:3118/callback",
+    ];
+    for (const redirectUri of rejected) {
+      const response = await app.inject({
+        method: "GET",
+        url: "/oauth/authorize",
+        query: {
+          client_id: LOOPBACK_CLIENT,
+          redirect_uri: redirectUri,
+          response_type: "code",
+          code_challenge: challengeFor(makeVerifier()),
+          code_challenge_method: "S256",
+        },
+      });
+      expect(response.statusCode, redirectUri).toBe(400);
+    }
+    clientDocument = { client_id: CLIENT_ID, client_name: "Test MCP Client", redirect_uris: [REDIRECT_URI] };
+    await app.close();
+  });
+
+  it("keeps localhost and 127.0.0.1 as distinct registrations", async () => {
+    const app = await makeApp();
+    // Ignoring the port must not slide into ignoring the host: a client that
+    // registered only localhost has not registered the IP literal, and the two
+    // are different origins to a browser.
+    clientDocument = {
+      client_id: LOOPBACK_CLIENT,
+      client_name: "Localhost only",
+      redirect_uris: ["http://localhost/callback"],
+    };
+    const accepted = await app.inject({
+      method: "GET",
+      url: "/oauth/authorize",
+      query: {
+        client_id: LOOPBACK_CLIENT,
+        redirect_uri: "http://localhost:3118/callback",
+        response_type: "code",
+        code_challenge: challengeFor(makeVerifier()),
+        code_challenge_method: "S256",
+      },
+    });
+    expect(accepted.statusCode).toBe(302);
+
+    const refused = await app.inject({
+      method: "GET",
+      url: "/oauth/authorize",
+      query: {
+        client_id: LOOPBACK_CLIENT,
+        redirect_uri: "http://127.0.0.1:3118/callback",
+        response_type: "code",
+        code_challenge: challengeFor(makeVerifier()),
+        code_challenge_method: "S256",
+      },
+    });
+    expect(refused.statusCode).toBe(400);
+    clientDocument = { client_id: CLIENT_ID, client_name: "Test MCP Client", redirect_uris: [REDIRECT_URI] };
+    await app.close();
+  });
+
+  it("refuses a redirect_uri carrying userinfo", async () => {
+    const app = await makeApp();
+    // Listed by the client's own document, and still refused: half the parsers
+    // in the world read this as a request to evil.test.
+    clientDocument = {
+      client_id: LOOPBACK_CLIENT,
+      client_name: "Impostor",
+      redirect_uris: ["https://evil.test@127.0.0.1/callback"],
+    };
+    const response = await app.inject({
+      method: "GET",
+      url: "/oauth/authorize",
+      query: {
+        client_id: LOOPBACK_CLIENT,
+        redirect_uri: "https://evil.test@127.0.0.1/callback",
+        response_type: "code",
+        code_challenge: challengeFor(makeVerifier()),
+        code_challenge_method: "S256",
+      },
+    });
+    expect(response.statusCode).toBe(400);
+    clientDocument = { client_id: CLIENT_ID, client_name: "Test MCP Client", redirect_uris: [REDIRECT_URI] };
+    await app.close();
+  });
+});
+
+describe("scope and resource negotiation", () => {
+  it("grants offline_access when a client asks for it", async () => {
+    const app = await makeApp();
+    const { token } = await runFlow(app, { scope: "seerr:read offline_access" });
+    expect(token.statusCode).toBe(200);
+    const body = JSON.parse(token.payload);
+    expect(body.scope).toBe("seerr:read offline_access");
+    expect(body.refresh_token).toBeTruthy();
+    await app.close();
+  });
+
+  it("refuses a token request naming another resource", async () => {
+    const app = await makeApp();
+    const { code, verifier } = await getAuthorizationCode(app);
+    const token = await app.inject({
+      method: "POST",
+      url: "/oauth/token",
+      payload: {
+        grant_type: "authorization_code",
+        code,
+        redirect_uri: REDIRECT_URI,
+        client_id: CLIENT_ID,
+        code_verifier: verifier,
+        resource: "https://someone-else.test/mcp",
+      },
+    });
+    expect(token.statusCode).toBe(400);
+    expect(JSON.parse(token.payload).error).toBe("invalid_target");
+    await app.close();
+  });
+
+  it("accepts the resource it actually serves", async () => {
+    const app = await makeApp();
+    const { code, verifier } = await getAuthorizationCode(app);
+    const token = await app.inject({
+      method: "POST",
+      url: "/oauth/token",
+      payload: {
+        grant_type: "authorization_code",
+        code,
+        redirect_uri: REDIRECT_URI,
+        client_id: CLIENT_ID,
+        code_verifier: verifier,
+        resource: RESOURCE,
+      },
+    });
+    expect(token.statusCode).toBe(200);
     await app.close();
   });
 });

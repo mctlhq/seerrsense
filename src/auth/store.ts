@@ -1,6 +1,10 @@
 import { hashToken } from "./crypto.js";
 
-/** A login in flight: created at /oauth/authorize, consumed at the Google callback. */
+/**
+ * A login in flight. Created at /oauth/authorize and consumed at the Google
+ * callback; then created a second time, now carrying the verified identity, to
+ * survive the consent screen until the person answers it.
+ */
 export interface PendingAuth {
   state: string;
   clientId: string;
@@ -12,6 +16,9 @@ export interface PendingAuth {
   googleVerifier: string;
   googleNonce: string;
   expiresAt: number;
+  /** Set only on the second hop, once Google has said who this is. */
+  subject?: string;
+  email?: string;
 }
 
 /** An authorization code: issued after Google verifies the user, consumed at /oauth/token. */
@@ -19,6 +26,8 @@ export interface AuthCode {
   code: string;
   clientId: string;
   redirectUri: string;
+  /** The client's own state, echoed back untouched on the final redirect. */
+  clientState?: string;
   codeChallenge: string;
   scope: string;
   resource: string;
