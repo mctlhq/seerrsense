@@ -1,0 +1,73 @@
+name: release-please
+
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  release-please:
+    runs-on: ubuntu-latest
+    steps:
+      # The default GITHUB_TOKEN cannot open the release PR: "Allow GitHub
+      # Actions to create and approve pull requests" is off at the org level,
+      # which silently stalled seven releases on mctl-telegram (#498). A token
+      # minted from the mctl-agents App sidesteps the setting, and a PR opened
+      # with an App token raises pull_request events, so the release PR gets
+      # normal CI.
+      - name: Generate release token
+        id: release-token
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        with:
+          app-id: ${{ secrets.AGENTS_APP_ID }}
+          private-key: ${{ secrets.AGENTS_APP_PRIVATE_KEY }}
+          owner: mctlhq
+          repositories: seerrsense
+          permission-contents: write
+          permission-pull-requests: write
+
+      - uses: googleapis/release-please-action@v5
+        id: release
+        with:
+          token: ${{ steps.release-token.outputs.token }}
+          config-file: release-please-config.json
+          manifest-file: .release-please-manifest.json
+
+      # Deploy the way every other onboarded mctlhq service does: hand the tag
+      # to mctl-gitops, which builds ghcr.io/mctlhq/seerrsense from this repo's
+      # Dockerfile and commits the new image.tag to
+      # platform-gitops/services/labs/seerrsense/values.yaml for ArgoCD. No
+      # values_path override: that default path is already the right one.
+      #
+      # mctl-agents is the backend-only App, deliberately not MCTL App
+      # (secrets.APP_ID), which is the customer-installed App being narrowed to
+      # read-only permissions (mctlhq/mctl-gitops#761); actions:write on
+      # mctl-gitops has to live on the internal App instead.
+      - name: Generate Platform App token
+        if: ${{ steps.release.outputs.release_created == 'true' }}
+        id: app
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        with:
+          app-id: ${{ secrets.AGENTS_APP_ID }}
+          private-key: ${{ secrets.AGENTS_APP_PRIVATE_KEY }}
+          owner: mctlhq
+          repositories: mctl-gitops
+
+      - name: Dispatch centralized release-deploy
+        if: ${{ steps.release.outputs.release_created == 'true' }}
+        env:
+          GH_TOKEN: ${{ steps.app.outputs.token }}
+          TAG: ${{ steps.release.outputs.tag_name }}
+        run: |
+          gh workflow run release-deploy.yaml \
+            --repo mctlhq/mctl-gitops \
+            --ref main \
+            -f repo=mctlhq/seerrsense \
+            -f git_ref="$TAG" \
+            -f image_name=ghcr.io/mctlhq/seerrsense \
+            -f image_tag="$TAG" \
+            -f team_name=labs \
+            -f component_name=seerrsense

@@ -1,0 +1,12 @@
+{
+  "$schema": "https://raw.githubusercontent.com/googleapis/release-please/main/schemas/config.json",
+  "release-type": "node",
+  "include-v-in-tag": false,
+  "include-component-in-tag": false,
+  "last-release-sha": "2ac5e68e15328f4a05e3b839530cbe2cd9c6ff70",
+  "packages": {
+    ".": {
+      "package-name": "seerrsense"
+    }
+  }
+}
