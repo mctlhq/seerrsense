@@ -120,6 +120,19 @@ Setting some but not all is refused at startup.
 ## MCP
 *TBD*
 
+## Web
+
+`GET /` serves a static landing page from `public/`, with `/favicon.svg`,
+`/og.png` and `/assets/*`. Those paths, the health probes and the OAuth
+endpoints are the only ones served without a token.
+
+There is no catch-all route: this is not a single-page app, and an undeclared
+path is never answered with the page. The tokens the page uses are served from
+this origin as `/assets/tokens.css`, so it stays readable when
+`https://ui.mctl.ai/mctl.css` cannot be reached; the CDN copy is loaded after it
+as the canonical source. The MCP endpoint shown on the page is derived from
+`window.location.origin`, so promoting a domain needs no change here.
+
 ## REST API
 *TBD*
 

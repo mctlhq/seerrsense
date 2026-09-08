@@ -1,5 +1,8 @@
 import { createMcpHandler, type AuthInfo } from "@modelcontextprotocol/server";
 import { toNodeHandler } from "@modelcontextprotocol/node";
+import fastifyStatic from "@fastify/static";
+import { fileURLToPath } from "node:url";
+import { dirname, join } from "node:path";
 import Fastify from "fastify";
 import { createSeerrSenseMcpServer } from "../mcp/server.js";
 import { seerrClient } from "../providers/seerr/client.js";
@@ -117,6 +120,32 @@ export function buildServer(deps: { store?: AuthStore; fetchImpl?: typeof fetch 
     // server factory reads to scope the write tool.
     (request.raw as { auth?: AuthInfo }).auth = auth;
   });
+
+  // The landing page: three explicit routes plus one prefixed asset directory.
+  // The first registration passes `serve: false`, so it adds no routes and only
+  // lends reply.sendFile the public root — there is no wildcard at "/" that
+  // could serve files by name or shadow a route added later. This is not a
+  // single-page app: a path that is not declared here is not answered with the
+  // page. It meets the auth gate instead and is refused, since everything
+  // outside PUBLIC_PREFIXES needs a token.
+  const publicDir = join(dirname(fileURLToPath(import.meta.url)), "..", "..", "public");
+  fastify.register(fastifyStatic, { root: publicDir, serve: false });
+  fastify.register(fastifyStatic, {
+    root: join(publicDir, "assets"),
+    prefix: "/assets/",
+    decorateReply: false,
+    index: false,
+    // Asset URLs are not fingerprinted, so a long cache would let a browser
+    // pair a freshly deployed page with the previous stylesheet. Five minutes
+    // is enough to spare the repeat requests and short enough that a rollout
+    // heals itself; the files are a few kilobytes.
+    cacheControl: true,
+    maxAge: 300_000,
+  });
+
+  fastify.get("/", async (_request, reply) => reply.type("text/html; charset=utf-8").sendFile("index.html"));
+  fastify.get("/favicon.svg", async (_request, reply) => reply.type("image/svg+xml").sendFile("favicon.svg"));
+  fastify.get("/og.png", async (_request, reply) => reply.type("image/png").sendFile("og.png"));
 
   fastify.get("/health", async () => {
     return { status: "ok" };

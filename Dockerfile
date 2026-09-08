@@ -18,6 +18,8 @@ COPY package.json package-lock.json* ./
 RUN npm ci --omit=dev
 
 COPY --from=builder /app/dist ./dist
+# The landing page is served from here at runtime, not bundled into dist.
+COPY public/ ./public/
 
 EXPOSE 8787
 

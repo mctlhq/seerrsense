@@ -1,0 +1,317 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>SeerrSense — natural-language media requests for Overseerr and Jellyseerr</title>
+<meta name="description" content="An MCP server in front of Overseerr or Jellyseerr. Ask an AI assistant for a film or series in plain language; SeerrSense resolves what you meant and requests it through your own Seerr.">
+
+<link rel="icon" type="image/svg+xml" href="/favicon.svg">
+<link rel="apple-touch-icon" href="/og.png">
+
+<meta property="og:type" content="website">
+<meta property="og:site_name" content="SeerrSense">
+<meta property="og:title" content="SeerrSense — natural-language media requests for Overseerr and Jellyseerr">
+<meta property="og:description" content="An MCP server in front of your Seerr. Ask an AI assistant for a film in plain language; SeerrSense resolves what you meant and requests it.">
+<meta property="og:url" content="https://seerrsense.mctl.ai">
+<meta property="og:image" content="https://seerrsense.mctl.ai/og.png">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:title" content="SeerrSense — natural-language media requests for Overseerr and Jellyseerr">
+<meta name="twitter:description" content="An MCP server in front of your Seerr. Ask an AI assistant for a film in plain language; SeerrSense resolves what you meant and requests it.">
+<meta name="twitter:image" content="https://seerrsense.mctl.ai/og.png">
+
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Onest:wght@400;500;600&family=JetBrains+Mono:wght@400;500;600&display=swap">
+<!-- Local tokens first so the page is correct if the CDN is unreachable, then
+     the canonical sheet, then this page's own components. -->
+<link rel="stylesheet" href="/assets/tokens.css">
+<link rel="stylesheet" href="https://ui.mctl.ai/mctl.css">
+<link rel="stylesheet" href="/assets/components.css">
+</head>
+<body>
+
+<header class="wrap topbar">
+  <span class="brand">
+    <svg class="brand-mark" viewBox="0 0 32 32" aria-hidden="true">
+      <circle cx="14" cy="14" r="7.5" fill="none" stroke="currentColor" stroke-width="2.5" style="color: var(--accent)"/>
+      <path d="M19.5 19.5 L26 26" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" style="color: var(--accent)"/>
+      <circle cx="14" cy="14" r="2.5" fill="currentColor" style="color: var(--accent)"/>
+    </svg>
+    SeerrSense
+  </span>
+  <nav class="topbar-links">
+    <a href="#tools">Tools</a>
+    <a href="#setup">Setup</a>
+    <a href="https://github.com/mctlhq/seerrsense">GitHub</a>
+    <button class="theme-toggle" id="theme-toggle" type="button" hidden aria-label="Switch between light and dark">
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
+        <path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8z"/>
+      </svg>
+    </button>
+  </nav>
+</header>
+
+<main>
+
+<section class="hero wrap">
+  <p class="eyebrow">MCP server</p>
+  <h1>Ask for a film in plain language.<br>Your Seerr does the rest.</h1>
+  <p class="lead">
+    SeerrSense sits in front of Overseerr or Jellyseerr and speaks the Model Context
+    Protocol, so Claude, ChatGPT or any MCP client can search your catalogue, work out
+    which title you actually meant, and file the request on your own server.
+  </p>
+
+  <div class="endpoint">
+    <span class="label">Endpoint</span>
+    <code id="mcp-url">https://seerrsense.mctl.ai/mcp</code>
+  </div>
+
+  <div class="cta-row">
+    <button class="btn btn-primary" id="copy-url" type="button" data-idle="Copy MCP URL" data-done="Copied">Copy MCP URL</button>
+    <a class="btn btn-secondary" href="https://github.com/mctlhq/seerrsense">View on GitHub</a>
+  </div>
+</section>
+
+<section class="wrap">
+  <div class="section-head">
+    <h2>What it adds to the Seerr stack</h2>
+    <p>Seerr already knows your library and talks to Radarr and Sonarr. What it does not do is
+      take a vague sentence and turn it into the right TMDB id.</p>
+  </div>
+  <div class="card-grid">
+    <article class="card">
+      <svg class="card-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg>
+      <h3>Resolution, not just search</h3>
+      <p>“That submarine film with the German crew” goes through Seerr’s own search first, then a
+        normalised retry, and only then a language model that proposes titles, people and years —
+        never an id. Every candidate is verified against Seerr before it is offered.</p>
+    </article>
+    <article class="card">
+      <svg class="card-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M12 3v18M5 8l7-5 7 5"/></svg>
+      <h3>Your server, your rules</h3>
+      <p>Requests are filed through your Seerr instance with your API key, so quotas, approvals
+        and the existing request history keep working exactly as before.</p>
+    </article>
+    <article class="card">
+      <svg class="card-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><rect x="3" y="11" width="18" height="10" rx="2"/><path d="M8 11V7a4 4 0 0 1 8 0v4"/></svg>
+      <h3>Writes are guarded</h3>
+      <p>Before anything is requested, SeerrSense re-reads the canonical record and refuses when the
+        title is already available or pending. The write tool needs its own scope.</p>
+    </article>
+  </div>
+</section>
+
+<section class="wrap">
+  <div class="section-head">
+    <h2>How a request travels</h2>
+    <p>SeerrSense holds no library of its own. It resolves, then hands the work to the stack you
+      already run.</p>
+  </div>
+  <div class="flow-scroll">
+    <div class="flow">
+      <div class="flow-node">
+        <div class="node-name">AI client</div>
+        <p class="node-label">Claude, ChatGPT or any MCP client</p>
+      </div>
+      <div class="flow-arrow" aria-hidden="true">→</div>
+      <div class="flow-node is-self">
+        <div class="node-name">SeerrSense</div>
+        <p class="node-label">Resolves the title, checks the status, guards the write</p>
+      </div>
+      <div class="flow-arrow" aria-hidden="true">→</div>
+      <div class="flow-node">
+        <div class="node-name">Seerr</div>
+        <p class="node-label">Overseerr or Jellyseerr: quotas, approvals, history</p>
+      </div>
+      <div class="flow-arrow" aria-hidden="true">→</div>
+      <div class="flow-node">
+        <div class="node-name">Radarr / Sonarr</div>
+        <p class="node-label">Downloads, as they always did</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section class="wrap" id="tools">
+  <div class="section-head">
+    <h2>MCP tools</h2>
+    <p>Four tools, one of which writes. The same operations are also available over REST at
+      <code>/api/v1</code>.</p>
+  </div>
+  <div class="table-scroll">
+    <table>
+      <thead>
+        <tr><th scope="col">Tool</th><th scope="col">What it does</th><th scope="col">Scope</th></tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td><code>search_media</code></td>
+          <td class="muted">Exact or fuzzy search straight through Seerr, films and series only.</td>
+          <td><span class="chip">seerr:read</span></td>
+        </tr>
+        <tr>
+          <td><code>resolve_media</code></td>
+          <td class="muted">Turns a description into verified candidates: native search, normalised retry, then language-model intent checked back against Seerr.</td>
+          <td><span class="chip">seerr:read</span></td>
+        </tr>
+        <tr>
+          <td><code>get_media</code></td>
+          <td class="muted">The canonical record for one TMDB id, including availability.</td>
+          <td><span class="chip">seerr:read</span></td>
+        </tr>
+        <tr>
+          <td><code>request_media</code></td>
+          <td class="muted">Files the request, optionally for named seasons. Refuses when the title is already available, pending or blocklisted.</td>
+          <td><span class="chip is-write">seerr:request</span></td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<section class="wrap">
+  <div class="section-head">
+    <h2>Connecting to Seerr</h2>
+    <p>One instance, one API key, read through the same endpoints the web interface uses.</p>
+  </div>
+  <div class="card-grid">
+    <article class="card">
+      <h3>Credentials</h3>
+      <p><code>SEERR_URL</code> and <code>SEERR_API_KEY</code>. Nothing is written anywhere else,
+        and no catalogue data is stored by SeerrSense.</p>
+    </article>
+    <article class="card">
+      <h3>Behind Cloudflare Zero Trust</h3>
+      <p>Set <code>CF_ACCESS_CLIENT_ID</code> and <code>CF_ACCESS_CLIENT_SECRET</code> and the
+        service-token headers travel with every call to Seerr.</p>
+    </article>
+    <article class="card">
+      <h3>Optional semantic layer</h3>
+      <p>With <code>NEBIUS_API_KEY</code> set, unresolved phrasings go through a language model that
+        proposes titles for verification. Without it, search still works.</p>
+    </article>
+  </div>
+</section>
+
+<section class="wrap" id="setup">
+  <div class="section-head">
+    <h2>Set it up</h2>
+    <p>Use the hosted endpoint, or run it yourself next to your Seerr.</p>
+  </div>
+  <ol class="steps">
+    <li><strong>Add the MCP server.</strong> Point your client at the endpoint above and give it the
+      bearer token you were issued.
+      <pre><code>{
+  "seerrsense": {
+    "serverUrl": "<span class="mcp-url-slot">https://seerrsense.mctl.ai/mcp</span>",
+    "headers": { "Authorization": "Bearer &lt;your token&gt;" }
+  }
+}</code></pre>
+    </li>
+    <li><strong>Or run it locally.</strong> Standalone binaries for Linux, macOS and Windows are
+      attached to every <a href="https://github.com/mctlhq/seerrsense/releases">release</a>, and the
+      server speaks stdio for clients that prefer to own the process.
+      <pre><code>seerrsense stdio</code></pre>
+    </li>
+    <li><strong>Ask for something.</strong> “Find that heist film Michael Mann made in the nineties
+      and request it.”</li>
+  </ol>
+</section>
+
+<section class="wrap">
+  <div class="section-head">
+    <h2>Questions</h2>
+  </div>
+  <div class="faq-list">
+    <details class="faq-item">
+      <summary>Does it replace Overseerr or Jellyseerr?</summary>
+      <p>No. It is a layer in front of one. Every request is filed through your Seerr, which keeps
+        owning quotas, approvals, notifications and the request history.</p>
+    </details>
+    <details class="faq-item">
+      <summary>Can an assistant request things on its own?</summary>
+      <p>Requesting is a separate scope from reading, and the tool description tells the model to
+        confirm with you first. The server also re-reads the canonical record and refuses to file a
+        request for something already available or pending.</p>
+    </details>
+    <details class="faq-item">
+      <summary>How is access controlled?</summary>
+      <p>The MCP endpoint requires a bearer token. The server can also act as its own OAuth 2.1
+        authorization server with Google as the identity provider, in which case each person signs
+        in with their own account, tokens are short-lived and can be revoked individually, and
+        access is limited to an explicit list of addresses.</p>
+    </details>
+    <details class="faq-item">
+      <summary>Does a language model see my library?</summary>
+      <p>Only the phrase you typed is sent, and only when the ordinary search paths fail. The model
+        proposes titles, people and years; it never returns provider ids, and every candidate is
+        verified against Seerr before you see it.</p>
+    </details>
+    <details class="faq-item">
+      <summary>Can I self-host it?</summary>
+      <p>Yes. It is a single container, or a standalone binary, with three required settings. See
+        the repository for the full list.</p>
+    </details>
+  </div>
+</section>
+
+</main>
+
+<footer class="wrap">
+  <div class="footer-row">
+    <span>SeerrSense — part of the <a href="https://mctl.ai">mctl</a> platform.</span>
+    <span><a href="https://github.com/mctlhq/seerrsense">Source</a> · <a href="https://github.com/mctlhq/seerrsense/issues">Issues</a></span>
+  </div>
+</footer>
+
+<script>
+(function () {
+  var root = document.documentElement;
+
+  // Theme. Dark is the default in CSS, the system preference applies to a
+  // visitor who has never chosen, and an explicit choice outlives both.
+  var stored = null;
+  try { stored = localStorage.getItem("seerrsense-theme"); } catch (e) {}
+  if (stored === "light" || stored === "dark") root.setAttribute("data-theme", stored);
+
+  var toggle = document.getElementById("theme-toggle");
+  if (toggle) {
+    toggle.hidden = false;
+    toggle.addEventListener("click", function () {
+      var current = root.getAttribute("data-theme");
+      if (!current) {
+        current = window.matchMedia("(prefers-color-scheme: light)").matches ? "light" : "dark";
+      }
+      var next = current === "dark" ? "light" : "dark";
+      root.setAttribute("data-theme", next);
+      try { localStorage.setItem("seerrsense-theme", next); } catch (e) {}
+    });
+  }
+
+  // The endpoint is whatever host this page was served from, so promoting a
+  // domain needs no change here.
+  var url = window.location.origin + "/mcp";
+  var target = document.getElementById("mcp-url");
+  if (target) target.textContent = url;
+  Array.prototype.forEach.call(document.querySelectorAll(".mcp-url-slot"), function (slot) {
+    slot.textContent = url;
+  });
+
+  var copy = document.getElementById("copy-url");
+  if (copy && navigator.clipboard) {
+    copy.addEventListener("click", function () {
+      navigator.clipboard.writeText(url).then(function () {
+        copy.textContent = copy.dataset.done;
+        setTimeout(function () { copy.textContent = copy.dataset.idle; }, 1600);
+      });
+    });
+  } else if (copy) {
+    copy.hidden = true;
+  }
+})();
+</script>
+
+</body>
+</html>
