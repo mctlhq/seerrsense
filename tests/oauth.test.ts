@@ -4,13 +4,19 @@ import { SignJWT, exportJWK, generateKeyPair, type CryptoKey } from "jose";
 const SIGNING_KEY = new TextEncoder().encode("x".repeat(48));
 import { createHash, randomBytes } from "node:crypto";
 
-vi.mock("../src/providers/seerr/client.js", () => ({
-  seerrClient: {
-    status: vi.fn().mockResolvedValue({ status: 200 }),
+// The household Seerr. Both the singleton and the factory are stubbed:
+// the server builds its default client through the factory now.
+const householdSeerr = vi.hoisted(() => ({
+  status: vi.fn().mockResolvedValue({ status: 200 }),
     search: vi.fn().mockResolvedValue([]),
     getMedia: vi.fn().mockResolvedValue({ id: 1, mediaType: "movie", title: "T", status: "UNKNOWN" }),
     requestMedia: vi.fn().mockResolvedValue({ success: true }),
-  },
+}));
+
+vi.mock("../src/providers/seerr/client.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../src/providers/seerr/client.js")>()),
+  seerrClient: householdSeerr,
+  createDefaultSeerrClient: () => householdSeerr,
 }));
 
 const ISSUER = "https://seerrsense.test";

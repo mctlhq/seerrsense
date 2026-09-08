@@ -5,7 +5,8 @@ import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 import Fastify from "fastify";
 import { createSeerrSenseMcpServer } from "../mcp/server.js";
-import { seerrClient } from "../providers/seerr/client.js";
+import { createDefaultSeerrClient } from "../providers/seerr/client.js";
+import { notConnectedMessage, TenantResolver, type Tenant } from "../providers/seerr/tenants.js";
 import { MediaParamsSchema, RequestBodySchema } from "../core/media.js";
 import { assertHttpConfig, config as rawConfig } from "../core/config.js";
 import { createMcpFastifyApp } from "@modelcontextprotocol/fastify";
@@ -61,7 +62,6 @@ export function buildServer(deps: { store?: AuthStore; fetchImpl?: typeof fetch 
   }
   // We use createMcpFastifyApp for host/dns rebinding protection as recommended
   const fastify = createMcpFastifyApp({ host: "0.0.0.0" });
-  const mediaService = new MediaRequestService();
 
   const authStore: AuthStore | undefined = authSettings.oauth
     ? (deps.store ?? (authSettings.oauth.databaseUrl
@@ -88,6 +88,16 @@ export function buildServer(deps: { store?: AuthStore; fetchImpl?: typeof fetch 
       await authStore.close();
     });
   }
+
+  const tenants = new TenantResolver(
+    authStore,
+    authSettings.oauth?.encryptionKey,
+    createDefaultSeerrClient(),
+  );
+
+  /** The Seerr resolved for this request, attached by the auth hook. */
+  const tenantOf = (request: { raw: unknown }): Tenant | undefined =>
+    (request.raw as { tenant?: Tenant }).tenant;
 
   fastify.addHook("preHandler", async (request, reply) => {
     if (isPublic(request.url)) return;
@@ -119,6 +129,9 @@ export function buildServer(deps: { store?: AuthStore; fetchImpl?: typeof fetch 
     // toNodeHandler forwards req.auth to the MCP handler as authInfo, which the
     // server factory reads to scope the write tool.
     (request.raw as { auth?: AuthInfo }).auth = auth;
+    // Which Seerr this caller reaches. Resolved once per request and cached by
+    // subject, so the MCP hot path keeps its "no database read" property.
+    (request.raw as { tenant?: Tenant }).tenant = await tenants.resolve(auth);
   });
 
   // The landing page: three explicit routes plus one prefixed asset directory.
@@ -171,7 +184,11 @@ export function buildServer(deps: { store?: AuthStore; fetchImpl?: typeof fetch 
     if (!q.success) {
       return reply.status(400).send({ error: "Missing or invalid query parameter" });
     }
-    return seerrClient.search(q.data.query);
+    const tenant = tenantOf(request);
+    if (!tenant?.client) {
+      return reply.status(409).send({ error: notConnectedMessage(config.SEERRSENSE_PUBLIC_URL) });
+    }
+    return tenant.client.search(q.data.query);
   });
 
   fastify.get("/api/v1/media/:mediaType/:tmdbId", async (request, reply) => {
@@ -179,7 +196,11 @@ export function buildServer(deps: { store?: AuthStore; fetchImpl?: typeof fetch 
     if (!params.success) {
       return reply.status(400).send({ error: params.error.issues });
     }
-    return seerrClient.getMedia(params.data.mediaType, params.data.tmdbId);
+    const tenant = tenantOf(request);
+    if (!tenant?.client) {
+      return reply.status(409).send({ error: notConnectedMessage(config.SEERRSENSE_PUBLIC_URL) });
+    }
+    return tenant.client.getMedia(params.data.mediaType, params.data.tmdbId);
   });
 
   fastify.post("/api/v1/request", async (request, reply) => {
@@ -187,8 +208,13 @@ export function buildServer(deps: { store?: AuthStore; fetchImpl?: typeof fetch 
     if (!body.success) {
       return reply.status(400).send({ error: body.error.issues });
     }
+    const tenant = tenantOf(request);
+    if (!tenant?.client) {
+      return reply.status(409).send({ error: notConnectedMessage(config.SEERRSENSE_PUBLIC_URL) });
+    }
     try {
-       const result = await mediaService.requestMediaSafely(body.data);
+       const service = new MediaRequestService(tenant.client, tenant.attributedUserId);
+       const result = await service.requestMediaSafely(body.data);
        return result;
     } catch (err: any) {
        return reply.status(400).send({ error: err.message });
@@ -196,18 +222,19 @@ export function buildServer(deps: { store?: AuthStore; fetchImpl?: typeof fetch 
   });
 
   // MCP v2 Protocol 2026-07-28 compliant Streamable HTTP endpoint
-  const handler = createMcpHandler((ctx) => createSeerrSenseMcpServer(ctx.authInfo?.scopes));
+  // The factory runs per request and reads both the granted scopes and the
+  // resolved tenant off the same request object.
+  const handler = createMcpHandler((ctx) => {
+    const raw = ctx.requestInfo as unknown as { tenant?: Tenant } | undefined;
+    return createSeerrSenseMcpServer(ctx.authInfo?.scopes, raw?.tenant);
+  });
   const nodeHandler = toNodeHandler(handler);
 
   fastify.all("/mcp", async (request, reply) => {
     await nodeHandler(request.raw, reply.raw, request.body);
   });
 
-  let intentExtractor;
-  if (config.NEBIUS_API_KEY) {
-    intentExtractor = new NebiusIntentExtractor();
-  }
-  const mediaResolver = new MediaResolver(seerrClient, intentExtractor);
+  const intentExtractor = config.NEBIUS_API_KEY ? new NebiusIntentExtractor() : undefined;
 
   fastify.get("/api/v1/resolve", async (request, reply) => {
     const q = SearchQuerySchema.safeParse(request.query);
@@ -215,7 +242,12 @@ export function buildServer(deps: { store?: AuthStore; fetchImpl?: typeof fetch 
       return reply.status(400).send({ error: "Missing or invalid query parameter" });
     }
     
+    const tenant = tenantOf(request);
+    if (!tenant?.client) {
+      return reply.status(409).send({ error: notConnectedMessage(config.SEERRSENSE_PUBLIC_URL) });
+    }
     try {
+      const mediaResolver = new MediaResolver(tenant.client, intentExtractor);
       const result = await mediaResolver.resolveMedia(q.data.query);
       return reply.send(result);
     } catch (e: any) {

@@ -1,13 +1,19 @@
 import { describe, it, expect, beforeAll, vi } from "vitest";
 import { buildServer } from "../src/api/server.js";
 
-vi.mock("../src/providers/seerr/client.js", () => ({
-  seerrClient: {
-    status: vi.fn().mockResolvedValue({ status: 200 }),
+// The household Seerr. Both the singleton and the factory are stubbed:
+// the server builds its default client through the factory now.
+const householdSeerr = vi.hoisted(() => ({
+  status: vi.fn().mockResolvedValue({ status: 200 }),
     search: vi.fn().mockResolvedValue([]),
     getMedia: vi.fn(),
     requestMedia: vi.fn(),
-  },
+}));
+
+vi.mock("../src/providers/seerr/client.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../src/providers/seerr/client.js")>()),
+  seerrClient: householdSeerr,
+  createDefaultSeerrClient: () => householdSeerr,
 }));
 
 let app: any;

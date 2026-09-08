@@ -1,0 +1,178 @@
+import { describe, it, expect, vi } from "vitest";
+import { randomBytes } from "node:crypto";
+import { seal } from "../src/auth/crypto.js";
+import { MemoryAuthStore } from "../src/auth/store.js";
+import { SeerrClient } from "../src/providers/seerr/client.js";
+import { TenantResolver, notConnectedMessage } from "../src/providers/seerr/tenants.js";
+
+const KEY = randomBytes(32);
+
+function authFor(subject: string, email: string) {
+  return {
+    token: "t",
+    clientId: "c",
+    scopes: ["seerr:read"],
+    expiresAt: Math.floor(Date.now() / 1000) + 60,
+    extra: { subject, email },
+  } as any;
+}
+
+function household(overrides: Partial<SeerrClient> = {}) {
+  return {
+    search: vi.fn().mockResolvedValue([]),
+    findUserIdByEmail: vi.fn().mockResolvedValue(undefined),
+    ...overrides,
+  } as unknown as SeerrClient;
+}
+
+describe("resolving which Seerr a caller reaches", () => {
+  it("uses the person's own instance when they have attached one", async () => {
+    const store = new MemoryAuthStore();
+    await store.putUserConnection({
+      subject: "google:1",
+      email: "one@example.com",
+      seerrUrl: "https://one.example/",
+      seerrApiKeySealed: seal("key-one", KEY),
+      updatedAt: Date.now(),
+    });
+    const resolver = new TenantResolver(store, KEY, household());
+
+    const tenant = await resolver.resolve(authFor("google:1", "one@example.com"));
+    expect(tenant.source).toBe("own");
+    // Not the household client, and the key came back out of the sealed value.
+    expect((tenant.client as any).apiKey).toBe("key-one");
+    expect((tenant.client as any).baseUrl).toBe("https://one.example");
+  });
+
+  it("keeps two people on their own instances", async () => {
+    const store = new MemoryAuthStore();
+    await store.putUserConnection({
+      subject: "google:1", email: "one@example.com", seerrUrl: "https://one.example",
+      seerrApiKeySealed: seal("key-one", KEY), updatedAt: Date.now(),
+    });
+    await store.putUserConnection({
+      subject: "google:2", email: "two@example.com", seerrUrl: "https://two.example",
+      seerrApiKeySealed: seal("key-two", KEY), updatedAt: Date.now(),
+    });
+    const resolver = new TenantResolver(store, KEY, household());
+
+    const first = await resolver.resolve(authFor("google:1", "one@example.com"));
+    const second = await resolver.resolve(authFor("google:2", "two@example.com"));
+    expect((first.client as any).baseUrl).toBe("https://one.example");
+    expect((second.client as any).baseUrl).toBe("https://two.example");
+  });
+
+  it("falls back to the household instance and attributes the request", async () => {
+    const store = new MemoryAuthStore();
+    const shared = household({ findUserIdByEmail: vi.fn().mockResolvedValue(42) } as any);
+    const resolver = new TenantResolver(store, KEY, shared);
+
+    const tenant = await resolver.resolve(authFor("google:3", "three@example.com"));
+    expect(tenant.source).toBe("household");
+    expect(tenant.client).toBe(shared);
+    // On a shared key the request would otherwise be filed under the owner.
+    expect(tenant.attributedUserId).toBe(42);
+  });
+
+  it("still resolves when the Seerr user lookup fails", async () => {
+    const shared = household({
+      findUserIdByEmail: vi.fn().mockRejectedValue(new Error("boom")),
+    } as any);
+    const resolver = new TenantResolver(new MemoryAuthStore(), KEY, shared);
+
+    const tenant = await resolver.resolve(authFor("google:4", "four@example.com"));
+    expect(tenant.client).toBe(shared);
+    expect(tenant.attributedUserId).toBeUndefined();
+  });
+
+  it("gives the legacy shared token and stdio the household instance", async () => {
+    const shared = household();
+    const resolver = new TenantResolver(new MemoryAuthStore(), KEY, shared);
+
+    expect((await resolver.resolve(authFor("static-token", ""))).client).toBe(shared);
+    expect((await resolver.resolve(undefined)).client).toBe(shared);
+  });
+
+  it("never lets the shared token reach a per-user connection", async () => {
+    const store = new MemoryAuthStore();
+    // A row under the legacy subject must not become a way to borrow somebody's
+    // Seerr: the shared token is not a person and has no connection of its own.
+    await store.putUserConnection({
+      subject: "static-token", email: "", seerrUrl: "https://smuggled.example",
+      seerrApiKeySealed: seal("key", KEY), updatedAt: Date.now(),
+    });
+    const shared = household();
+    const resolver = new TenantResolver(store, KEY, shared);
+
+    const tenant = await resolver.resolve(authFor("static-token", ""));
+    expect(tenant.source).toBe("household");
+    expect(tenant.client).toBe(shared);
+  });
+
+  it("reports nothing to talk to when there is no household instance", async () => {
+    const resolver = new TenantResolver(new MemoryAuthStore(), KEY, undefined);
+    const tenant = await resolver.resolve(authFor("google:5", "five@example.com"));
+    expect(tenant.source).toBe("none");
+    expect(tenant.client).toBeUndefined();
+    expect(notConnectedMessage("https://seerrsense.test")).toContain("https://seerrsense.test/account");
+  });
+
+  it("caches per subject and forgets on demand", async () => {
+    const store = new MemoryAuthStore();
+    const spy = vi.spyOn(store, "getUserConnection");
+    const resolver = new TenantResolver(store, KEY, household());
+
+    await resolver.resolve(authFor("google:6", "six@example.com"));
+    await resolver.resolve(authFor("google:6", "six@example.com"));
+    // The MCP hot path must not read the database on every tool call.
+    expect(spy).toHaveBeenCalledTimes(1);
+
+    resolver.forget("google:6");
+    await resolver.resolve(authFor("google:6", "six@example.com"));
+    expect(spy).toHaveBeenCalledTimes(2);
+  });
+
+  it("does not serve one person's Seerr to another out of the cache", async () => {
+    const store = new MemoryAuthStore();
+    await store.putUserConnection({
+      subject: "google:7", email: "seven@example.com", seerrUrl: "https://seven.example",
+      seerrApiKeySealed: seal("key-seven", KEY), updatedAt: Date.now(),
+    });
+    const shared = household();
+    const resolver = new TenantResolver(store, KEY, shared);
+
+    const seven = await resolver.resolve(authFor("google:7", "seven@example.com"));
+    const eight = await resolver.resolve(authFor("google:8", "eight@example.com"));
+    expect((seven.client as any).baseUrl).toBe("https://seven.example");
+    expect(eight.client).toBe(shared);
+  });
+});
+
+describe("filing a request", () => {
+  it("passes the attributed user through to Seerr", async () => {
+    const { MediaRequestService } = await import("../src/api/service.js");
+    const client = {
+      getMedia: vi.fn().mockResolvedValue({ status: "UNKNOWN" }),
+      requestMedia: vi.fn().mockResolvedValue({ success: true }),
+    } as unknown as SeerrClient;
+
+    await new MediaRequestService(client, 42).requestMediaSafely({ mediaType: "movie", tmdbId: 27205 });
+    expect(client.requestMedia).toHaveBeenCalledWith("movie", 27205, undefined, 42);
+
+    await new MediaRequestService(client).requestMediaSafely({ mediaType: "movie", tmdbId: 27205 });
+    expect(client.requestMedia).toHaveBeenLastCalledWith("movie", 27205, undefined, undefined);
+  });
+
+  it("still refuses to request something already available", async () => {
+    const { MediaRequestService } = await import("../src/api/service.js");
+    const client = {
+      getMedia: vi.fn().mockResolvedValue({ status: "AVAILABLE" }),
+      requestMedia: vi.fn(),
+    } as unknown as SeerrClient;
+
+    await expect(
+      new MediaRequestService(client, 42).requestMediaSafely({ mediaType: "movie", tmdbId: 1 }),
+    ).rejects.toThrow(/AVAILABLE/);
+    expect(client.requestMedia).not.toHaveBeenCalled();
+  });
+});

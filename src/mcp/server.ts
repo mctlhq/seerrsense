@@ -1,6 +1,7 @@
 import { McpServer } from "@modelcontextprotocol/server";
 import { z } from "zod";
-import { seerrClient } from "../providers/seerr/client.js";
+import type { Tenant } from "../providers/seerr/tenants.js";
+import { notConnectedMessage } from "../providers/seerr/tenants.js";
 import { MediaTypeSchema } from "../core/media.js";
 import { MediaRequestService } from "../api/service.js";
 import { MediaResolver } from "../api/resolver/index.js";
@@ -9,23 +10,33 @@ import { config } from "../core/config.js";
 import { SCOPE_REQUEST } from "../auth/config.js";
 
 /**
- * `scopes` is the authenticated caller's granted scopes, when the request came
- * through the OAuth gate. `undefined` means no authorization context at all —
- * stdio mode, where the client owns the process and there is nothing to scope.
+ * One MCP server for one caller.
+ *
+ * `scopes` is what the caller was granted; `tenant` is which Seerr they reach
+ * and as whom. Both are undefined in stdio mode, where the client owns the
+ * process: there is nothing to scope and only the local instance to talk to.
  */
-export function createSeerrSenseMcpServer(scopes?: string[]) {
+export function createSeerrSenseMcpServer(scopes?: string[], tenant?: Tenant) {
   const mcpServer = new McpServer({
     name: "SeerrSense",
     version: "1.0.0"
   });
 
-  const mediaService = new MediaRequestService();
-  
+  const client = tenant?.client;
+  const notConnected = () => ({
+    isError: true as const,
+    content: [{ type: "text" as const, text: notConnectedMessage(config.SEERRSENSE_PUBLIC_URL) }],
+  });
+
+  const mediaService = client
+    ? new MediaRequestService(client, tenant?.attributedUserId)
+    : undefined;
+
   let intentExtractor;
   if (config.NEBIUS_API_KEY) {
     intentExtractor = new NebiusIntentExtractor();
   }
-  const mediaResolver = new MediaResolver(seerrClient, intentExtractor);
+  const mediaResolver = client ? new MediaResolver(client, intentExtractor) : undefined;
 
   mcpServer.registerTool("search_media",
     {
@@ -34,7 +45,8 @@ export function createSeerrSenseMcpServer(scopes?: string[]) {
     },
     async ({ query }) => {
       try {
-        const results = await seerrClient.search(query);
+        if (!client) return notConnected();
+        const results = await client.search(query);
         return {
           content: [{ type: "text", text: JSON.stringify(results.slice(0, 5), null, 2) }]
         };
@@ -54,6 +66,7 @@ export function createSeerrSenseMcpServer(scopes?: string[]) {
     },
     async ({ query }) => {
       try {
+        if (!mediaResolver) return notConnected();
         const result = await mediaResolver.resolveMedia(query);
         return {
           content: [{ type: "text", text: JSON.stringify(result, null, 2) }]
@@ -77,7 +90,8 @@ export function createSeerrSenseMcpServer(scopes?: string[]) {
     },
     async ({ mediaType, tmdbId }) => {
       try {
-        const result = await seerrClient.getMedia(mediaType, tmdbId);
+        if (!client) return notConnected();
+        const result = await client.getMedia(mediaType, tmdbId);
         return {
           content: [{ type: "text", text: JSON.stringify(result, null, 2) }]
         };
@@ -109,6 +123,7 @@ export function createSeerrSenseMcpServer(scopes?: string[]) {
           content: [{ type: "text", text: `this token is not granted the ${SCOPE_REQUEST} scope` }]
         };
       }
+      if (!mediaService) return notConnected();
       try {
         const result = await mediaService.requestMediaSafely(payload);
         return {

@@ -5,13 +5,20 @@ import { seerrClient } from "../src/providers/seerr/client.js";
 
 // Mock the network calls
 import { vi } from "vitest";
-vi.mock("../src/providers/seerr/client.js", () => ({
-  seerrClient: {
-    status: vi.fn().mockResolvedValue({ status: 200 }),
-    search: vi.fn().mockResolvedValue([]),
-    getMedia: vi.fn(),
-    requestMedia: vi.fn()
-  }
+// The household Seerr. Both the singleton and the factory are stubbed: the
+// server builds its default client through the factory now.
+const householdSeerr = vi.hoisted(() => ({
+  status: vi.fn().mockResolvedValue({ status: 200 }),
+  search: vi.fn().mockResolvedValue([]),
+  getMedia: vi.fn(),
+  requestMedia: vi.fn(),
+  findUserIdByEmail: vi.fn().mockResolvedValue(undefined),
+}));
+
+vi.mock("../src/providers/seerr/client.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../src/providers/seerr/client.js")>()),
+  seerrClient: householdSeerr,
+  createDefaultSeerrClient: () => householdSeerr,
 }));
 
 let app: any;

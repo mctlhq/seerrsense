@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { parsePreRegisteredClients, type ResolvedClient } from "./clients.js";
+import { encryptionKeyFrom } from "./crypto.js";
 
 /**
  * Scopes this resource understands. Nothing else is advertised or granted: a
@@ -21,6 +22,7 @@ const OAuthEnvSchema = z.object({
   GOOGLE_OAUTH_CLIENT_SECRET: z.string().min(1).optional(),
   SEERRSENSE_OAUTH_JWT_SIGNING_KEY: z.string().optional(),
   SEERRSENSE_ALLOWED_EMAILS: z.string().optional(),
+  SEERRSENSE_ENCRYPTION_KEY: z.string().optional(),
   SEERRSENSE_OAUTH_CLIENTS: z.string().optional(),
   SEERRSENSE_LEGACY_TOKEN_ENABLED: z.string().optional(),
   SEERRSENSE_ACCESS_TOKEN_TTL: z.coerce.number().int().positive().max(24 * 3600).default(3600),
@@ -35,6 +37,8 @@ export interface OAuthConfig {
   googleClientSecret: string;
   googleRedirectUri: string;
   signingKey: Uint8Array;
+  /** Seals the Seerr API keys people attach. Absent means nobody can attach one. */
+  encryptionKey?: Buffer;
   allowedEmails: Set<string>;
   preRegisteredClients: ResolvedClient[];
   accessTokenTtl: number;
@@ -101,6 +105,9 @@ export function loadAuthSettings(
       googleClientSecret: parsed.GOOGLE_OAUTH_CLIENT_SECRET!,
       googleRedirectUri: `${issuer}/oauth/google/callback`,
       signingKey,
+      encryptionKey: parsed.SEERRSENSE_ENCRYPTION_KEY
+        ? encryptionKeyFrom(parsed.SEERRSENSE_ENCRYPTION_KEY)
+        : undefined,
       allowedEmails,
       preRegisteredClients: parsePreRegisteredClients(parsed.SEERRSENSE_OAUTH_CLIENTS),
       accessTokenTtl: parsed.SEERRSENSE_ACCESS_TOKEN_TTL,

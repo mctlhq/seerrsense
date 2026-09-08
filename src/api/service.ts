@@ -1,5 +1,5 @@
 import { MediaType } from "../core/media.js";
-import { seerrClient } from "../providers/seerr/client.js";
+import type { SeerrClient } from "../providers/seerr/client.js";
 
 export type SeerrRequestPayload = {
   mediaType: MediaType;
@@ -8,9 +8,18 @@ export type SeerrRequestPayload = {
 };
 
 export class MediaRequestService {
+  /**
+   * The Seerr to act on, and the user id to file under. Both come from the
+   * caller now: which Seerr this is depends on who asked.
+   */
+  constructor(
+    private readonly seerrClient: SeerrClient,
+    private readonly attributedUserId?: number,
+  ) {}
+
   async requestMediaSafely(payload: SeerrRequestPayload) {
     // 1. Canonical provider validation
-    const canonicalMedia = await seerrClient.getMedia(payload.mediaType, payload.tmdbId);
+    const canonicalMedia = await this.seerrClient.getMedia(payload.mediaType, payload.tmdbId);
     
     // 2. Check current state
     if (canonicalMedia.status !== "UNKNOWN" && canonicalMedia.status !== "PARTIALLY_AVAILABLE" && canonicalMedia.status !== "DELETED") {
@@ -18,6 +27,11 @@ export class MediaRequestService {
     }
 
     // 3. Mutate
-    return await seerrClient.requestMedia(payload.mediaType, payload.tmdbId, payload.seasons);
+    return await this.seerrClient.requestMedia(
+      payload.mediaType,
+      payload.tmdbId,
+      payload.seasons,
+      this.attributedUserId,
+    );
   }
 }
