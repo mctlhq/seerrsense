@@ -4,7 +4,7 @@ import Fastify from "fastify";
 import { createSeerrSenseMcpServer } from "../mcp/server.js";
 import { seerrClient } from "../providers/seerr/client.js";
 import { MediaParamsSchema, RequestBodySchema } from "../core/media.js";
-import { config } from "../core/config.js";
+import { assertHttpConfig, config as rawConfig } from "../core/config.js";
 import { createMcpFastifyApp } from "@modelcontextprotocol/fastify";
 import { MediaRequestService } from "./service.js";
 import { MediaResolver } from "./resolver/index.js";
@@ -14,6 +14,7 @@ import { z } from "zod";
 const SearchQuerySchema = z.object({ query: z.string().min(1) });
 
 export function buildServer() {
+  const config = assertHttpConfig(rawConfig);
   // We use createMcpFastifyApp for host/dns rebinding protection as recommended
   const fastify = createMcpFastifyApp({ host: "0.0.0.0" });
   const mediaService = new MediaRequestService();

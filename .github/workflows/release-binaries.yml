@@ -1,0 +1,39 @@
+name: Release Binaries
+
+on:
+  push:
+    tags:
+      - 'v*'
+      - '[0-9]+.[0-9]+.[0-9]+'
+
+jobs:
+  build-and-release:
+    name: Build Binaries
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.4.2
+          
+      - name: Install dependencies
+        run: npm ci
+        
+      - name: Build Standalone Executables
+        run: |
+          mkdir -p dist/bin
+          bun build ./src/index.ts --compile --target=bun-linux-x64 --outfile=dist/bin/seerrsense-linux-x64
+          bun build ./src/index.ts --compile --target=bun-windows-x64 --outfile=dist/bin/seerrsense-windows-x64.exe
+          bun build ./src/index.ts --compile --target=bun-darwin-x64 --outfile=dist/bin/seerrsense-darwin-x64
+          bun build ./src/index.ts --compile --target=bun-darwin-arm64 --outfile=dist/bin/seerrsense-darwin-arm64
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/bin/*
+          generate_release_notes: true
