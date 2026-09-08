@@ -32,6 +32,8 @@ export class SeerrClient {
           "Accept-Language": this.locale,
           "Content-Type": "application/json",
           "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/115.0.0.0 Safari/537.36",
+          ...(config.CF_ACCESS_CLIENT_ID ? { "CF-Access-Client-Id": config.CF_ACCESS_CLIENT_ID } : {}),
+          ...(config.CF_ACCESS_CLIENT_SECRET ? { "CF-Access-Client-Secret": config.CF_ACCESS_CLIENT_SECRET } : {}),
           ...(options.headers || {}),
         },
       });
