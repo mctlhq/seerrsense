@@ -1,10 +1,19 @@
 import { z } from "zod";
 import { parsePreRegisteredClients, type ResolvedClient } from "./clients.js";
 
-/** Scopes this resource understands. Nothing else is advertised or granted. */
+/**
+ * Scopes this resource understands. Nothing else is advertised or granted: a
+ * scope advertised but not issued makes both ChatGPT and Claude show the user a
+ * "not all permissions were granted" warning on a token that works fine.
+ *
+ * offline_access is listed because a refresh token is always issued. Claude
+ * requests it only when it appears here, and a client that asks for it must not
+ * be turned away with invalid_scope.
+ */
 export const SCOPE_READ = "seerr:read";
 export const SCOPE_REQUEST = "seerr:request";
-export const SUPPORTED_SCOPES = [SCOPE_READ, SCOPE_REQUEST] as const;
+export const SCOPE_OFFLINE = "offline_access";
+export const SUPPORTED_SCOPES = [SCOPE_READ, SCOPE_REQUEST, SCOPE_OFFLINE] as const;
 
 const OAuthEnvSchema = z.object({
   SEERRSENSE_PUBLIC_URL: z.string().url().optional(),

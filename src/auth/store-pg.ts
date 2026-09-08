@@ -23,12 +23,15 @@ const SCHEMA_SQL = `
         resource        TEXT        NOT NULL,
         google_verifier TEXT        NOT NULL,
         google_nonce    TEXT        NOT NULL,
-        expires_at      BIGINT      NOT NULL
+        expires_at      BIGINT      NOT NULL,
+        subject         TEXT,
+        email           TEXT
       );
       CREATE TABLE IF NOT EXISTS oauth_auth_codes (
         code           TEXT PRIMARY KEY,
         client_id      TEXT   NOT NULL,
         redirect_uri   TEXT   NOT NULL,
+        client_state   TEXT,
         code_challenge TEXT   NOT NULL,
         scope          TEXT   NOT NULL,
         resource       TEXT   NOT NULL,
@@ -51,6 +54,10 @@ const SCHEMA_SQL = `
     `;
 
 /**
+ * Note on the schema: CREATE TABLE IF NOT EXISTS never alters a table that
+ * already exists. These columns are safe to add now because no deployment has
+ * created these tables yet; a later column needs a real migration.
+ *
  * PostgreSQL-backed store, used when DATABASE_URL is set. It is what lets the
  * service keep refresh tokens across a rollout and run more than one replica:
  * every piece of OAuth state lives here rather than in the process.
@@ -99,10 +106,11 @@ export class PostgresAuthStore implements AuthStore {
     await this.pool.query(
       `INSERT INTO oauth_pending_auth
          (state, client_id, redirect_uri, client_state, code_challenge, scope, resource,
-          google_verifier, google_nonce, expires_at)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)`,
+          google_verifier, google_nonce, expires_at, subject, email)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)`,
       [p.state, p.clientId, p.redirectUri, p.clientState ?? null, p.codeChallenge, p.scope,
-       p.resource, p.googleVerifier, p.googleNonce, p.expiresAt],
+       p.resource, p.googleVerifier, p.googleNonce, p.expiresAt, p.subject ?? null,
+       p.email ?? null],
     );
   }
 
@@ -123,16 +131,19 @@ export class PostgresAuthStore implements AuthStore {
       googleVerifier: row.google_verifier,
       googleNonce: row.google_nonce,
       expiresAt: Number(row.expires_at),
+      subject: row.subject ?? undefined,
+      email: row.email ?? undefined,
     };
   }
 
   async putAuthCode(c: AuthCode): Promise<void> {
     await this.pool.query(
       `INSERT INTO oauth_auth_codes
-         (code, client_id, redirect_uri, code_challenge, scope, resource, subject, email, expires_at)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)`,
-      [c.code, c.clientId, c.redirectUri, c.codeChallenge, c.scope, c.resource, c.subject,
-       c.email, c.expiresAt],
+         (code, client_id, redirect_uri, client_state, code_challenge, scope, resource,
+          subject, email, expires_at)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)`,
+      [c.code, c.clientId, c.redirectUri, c.clientState ?? null, c.codeChallenge, c.scope,
+       c.resource, c.subject, c.email, c.expiresAt],
     );
   }
 
@@ -145,6 +156,7 @@ export class PostgresAuthStore implements AuthStore {
       code: row.code,
       clientId: row.client_id,
       redirectUri: row.redirect_uri,
+      clientState: row.client_state ?? undefined,
       codeChallenge: row.code_challenge,
       scope: row.scope,
       resource: row.resource,

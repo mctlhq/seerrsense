@@ -1,7 +1,7 @@
 import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 import { z } from "zod";
 import { ClientResolutionError, ClientResolver, isAllowedRedirectUri } from "./clients.js";
-import { SCOPE_READ, SUPPORTED_SCOPES, type OAuthConfig } from "./config.js";
+import { SCOPE_OFFLINE, SCOPE_READ, SUPPORTED_SCOPES, type OAuthConfig } from "./config.js";
 import { hashToken, isValidPkceString, randomToken, verifyPkceS256 } from "./crypto.js";
 import { GoogleOidc } from "./google.js";
 import type { AuthStore } from "./store.js";
@@ -9,6 +9,8 @@ import { signAccessToken } from "./tokens.js";
 
 const AUTH_CODE_TTL_MS = 10 * 60 * 1000;
 const PENDING_TTL_MS = 10 * 60 * 1000;
+/** How long the consent screen may sit open before the approved login expires. */
+const CONSENT_TTL_MS = 10 * 60 * 1000;
 
 /**
  * Bounds on every client-controlled string on the unauthenticated authorize
@@ -59,6 +61,94 @@ function redirectError(
   // talking to several cannot be fed a code minted by a different one.
   url.searchParams.set("iss", issuer);
   return reply.redirect(url.toString(), 302);
+}
+
+/** Everything interpolated below comes from a fetched client document, so it is untrusted. */
+function escapeHtml(value: string): string {
+  return value
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;");
+}
+
+const SCOPE_LABELS: Record<string, string> = {
+  "seerr:read": "Search your media library and read what is available",
+  "seerr:request": "Request new films and series on your behalf",
+  offline_access: "Stay connected without asking you to sign in again",
+};
+
+/**
+ * The one screen a person sees on this server.
+ *
+ * It exists for a specific reason, not for ceremony: the MCP authorization spec
+ * requires the redirect host to be shown when a client redirects to loopback,
+ * because any local process can bind a port and claim to be Claude Code. Showing
+ * it for every client keeps one code path and one habit.
+ *
+ * It doubles as the hand-off confirmation. A bare 302 back to the client leaves
+ * the person staring at a browser tab with no idea whether it worked, and they
+ * retry — each retry a fresh client registration upstream. A button click is
+ * also the user gesture a browser wants before handing focus to a desktop app.
+ */
+function consentPage(params: {
+  clientName: string;
+  redirectHost: string;
+  email: string;
+  scopes: string[];
+  code: string;
+  issuer: string;
+}): string {
+  const scopeItems = params.scopes
+    .map((scope) => `<li>${escapeHtml(SCOPE_LABELS[scope] ?? scope)}</li>`)
+    .join("\n        ");
+  return `<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Connect to SeerrSense</title>
+<link rel="icon" type="image/svg+xml" href="/favicon.svg">
+<link rel="stylesheet" href="/assets/tokens.css">
+<link rel="stylesheet" href="/assets/components.css">
+<style>
+  main { max-width: 460px; margin: 0 auto; padding: 64px 24px; }
+  .who { margin: 0 0 28px; color: var(--surface-fg-muted); }
+  .grants { margin: 0 0 28px; padding-left: 20px; color: var(--surface-fg-muted); }
+  .grants li { margin-bottom: 8px; }
+  .target { display: block; margin-top: 6px; font-family: var(--font-mono); font-size: 13px;
+            color: var(--surface-fg-subtle); overflow-wrap: anywhere; }
+  .actions { display: flex; gap: 12px; }
+  .actions form { flex: 1; }
+  .actions button { width: 100%; justify-content: center; }
+</style>
+</head>
+<body>
+<main>
+  <p class="eyebrow">Authorize</p>
+  <h2>${escapeHtml(params.clientName)} wants to use SeerrSense</h2>
+  <p class="who">Signed in as ${escapeHtml(params.email)}.
+    <span class="target">You will be returned to ${escapeHtml(params.redirectHost)}</span>
+  </p>
+  <ul class="grants">
+        ${scopeItems}
+  </ul>
+  <div class="actions">
+    <form method="post" action="/oauth/consent">
+      <input type="hidden" name="code" value="${escapeHtml(params.code)}">
+      <input type="hidden" name="decision" value="deny">
+      <button class="btn btn-secondary" type="submit">Cancel</button>
+    </form>
+    <form method="post" action="/oauth/consent">
+      <input type="hidden" name="code" value="${escapeHtml(params.code)}">
+      <input type="hidden" name="decision" value="allow">
+      <button class="btn btn-primary" type="submit">Allow</button>
+    </form>
+  </div>
+</main>
+</body>
+</html>`;
 }
 
 export function registerOAuthRoutes(
@@ -232,22 +322,80 @@ export function registerOAuthRoutes(
         "this account is not allowed to use this server", pending.clientState, config.issuer);
     }
 
+    // Google has said who this is; nothing is granted until the person answers
+    // the consent screen. The approved login is parked under a fresh single-use
+    // handle so the browser cannot carry anything but that handle across.
+    const consentHandle = randomToken();
+    await store.putPendingAuth({
+      ...pending,
+      state: consentHandle,
+      subject: `google:${identity.subject}`,
+      email: identity.email,
+      expiresAt: Date.now() + CONSENT_TTL_MS,
+    });
+
+    let clientName = pending.clientId;
+    try {
+      clientName = (await clients.resolve(pending.clientId)).clientName;
+    } catch {
+      // Already resolved once at /authorize; a failure here is a cache miss on
+      // an unreachable document, not a reason to refuse a verified login.
+    }
+
+    return reply
+      .header("content-type", "text/html; charset=utf-8")
+      // form-action must allow https: — this page POSTs to us and the answer is
+      // a redirect to the client's own host. 'self' alone silently blocks that
+      // hop and the button appears to do nothing.
+      .header(
+        "content-security-policy",
+        "default-src 'none'; style-src 'self'; img-src 'self'; form-action 'self' https: http://localhost:* http://127.0.0.1:*; base-uri 'none'",
+      )
+      .header("cache-control", "no-store")
+      .send(
+        consentPage({
+          clientName,
+          redirectHost: new URL(pending.redirectUri).host,
+          email: identity.email,
+          scopes: pending.scope.split(/\s+/).filter(Boolean),
+          code: consentHandle,
+          issuer: config.issuer,
+        }),
+      );
+  });
+
+  fastify.post("/oauth/consent", async (request: FastifyRequest, reply: FastifyReply) => {
+    const body = (request.body ?? {}) as { code?: string; decision?: string };
+    if (typeof body.code !== "string" || body.code.length === 0) {
+      return oauthError(reply, 400, "invalid_request", "this consent form is incomplete");
+    }
+    const approved = await store.takePendingAuth(body.code);
+    if (!approved || !approved.subject || !approved.email) {
+      return oauthError(reply, 400, "invalid_request", "this consent has expired or was already answered");
+    }
+
+    if (body.decision !== "allow") {
+      return redirectError(reply, approved.redirectUri, "access_denied",
+        "the user declined", approved.clientState, config.issuer);
+    }
+
     const code = randomToken();
     await store.putAuthCode({
       code,
-      clientId: pending.clientId,
-      redirectUri: pending.redirectUri,
-      codeChallenge: pending.codeChallenge,
-      scope: pending.scope,
-      resource: pending.resource,
-      subject: `google:${identity.subject}`,
-      email: identity.email,
+      clientId: approved.clientId,
+      redirectUri: approved.redirectUri,
+      clientState: approved.clientState,
+      codeChallenge: approved.codeChallenge,
+      scope: approved.scope,
+      resource: approved.resource,
+      subject: approved.subject,
+      email: approved.email,
       expiresAt: Date.now() + AUTH_CODE_TTL_MS,
     });
 
-    const url = new URL(pending.redirectUri);
+    const url = new URL(approved.redirectUri);
     url.searchParams.set("code", code);
-    if (pending.clientState !== undefined) url.searchParams.set("state", pending.clientState);
+    if (approved.clientState !== undefined) url.searchParams.set("state", approved.clientState);
     url.searchParams.set("iss", config.issuer);
     return reply.redirect(url.toString(), 302);
   });
@@ -258,6 +406,14 @@ export function registerOAuthRoutes(
       return oauthError(reply, 400, "invalid_request", body.error.issues[0]?.message ?? "invalid request");
     }
     const params = body.data;
+
+    // ChatGPT sends `resource` on the token request as well as the
+    // authorization request; a value naming somebody else's server must not be
+    // silently accepted and then contradicted by the audience we mint.
+    if (params.resource && params.resource !== config.resource) {
+      return oauthError(reply, 400, "invalid_target",
+        `this server only issues tokens for ${config.resource}`);
+    }
 
     if (params.grant_type === "authorization_code") {
       if (!params.code || !params.code_verifier || !params.redirect_uri) {

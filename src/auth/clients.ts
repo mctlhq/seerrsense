@@ -131,11 +131,57 @@ export class ClientResolver {
 }
 
 /**
- * Exact-match redirect URI check. No prefix or wildcard matching: a prefix rule
- * lets `https://good.example/cb` authorize `https://good.example/cb.evil.test`.
+ * Redirect URI check: exact match, except that a loopback address matches
+ * without its port.
+ *
+ * No prefix or wildcard matching — a prefix rule lets `https://good.example/cb`
+ * authorize `https://good.example/cb.evil.test`.
+ *
+ * The loopback exception is required, not a convenience. A native client binds
+ * an ephemeral port and cannot know it in advance, so RFC 8252 section 7.3 tells
+ * the authorization server to ignore the port for `127.0.0.1`. Claude Code
+ * declares exactly `http://localhost/callback` and `http://127.0.0.1/callback`
+ * in its Client ID Metadata Document and then arrives on a random port, so the
+ * same port-agnostic rule has to cover `localhost` too.
  */
 export function isAllowedRedirectUri(client: ResolvedClient, redirectUri: string): boolean {
-  return client.redirectUris.includes(redirectUri);
+  // Parse first: a URI carrying userinfo is refused even when the client's own
+  // document lists it, so no later comparison can be fooled by it.
+  const requested = parseRedirectUri(redirectUri);
+  if (!requested) return false;
+
+  if (client.redirectUris.includes(redirectUri)) return true;
+  if (!isLoopback(requested)) return false;
+
+  return client.redirectUris.some((registered) => {
+    const candidate = parseRedirectUri(registered);
+    return (
+      candidate !== undefined &&
+      isLoopback(candidate) &&
+      candidate.protocol === requested.protocol &&
+      candidate.hostname === requested.hostname &&
+      candidate.pathname === requested.pathname &&
+      candidate.search === requested.search
+    );
+  });
+}
+
+function parseRedirectUri(value: string): URL | undefined {
+  let url: URL;
+  try {
+    url = new URL(value);
+  } catch {
+    return undefined;
+  }
+  // Userinfo in a redirect target defeats every host check downstream:
+  // https://evil.test@claude.ai/cb parses with hostname claude.ai but reads as
+  // evil.test to anything that splits on the first "@".
+  if (url.username !== "" || url.password !== "") return undefined;
+  return url;
+}
+
+function isLoopback(url: URL): boolean {
+  return url.hostname === "localhost" || url.hostname === "127.0.0.1" || url.hostname === "[::1]";
 }
 
 /** Parses SEERRSENSE_OAUTH_CLIENTS: `client_id=redirect_uri[,redirect_uri...];...` */
