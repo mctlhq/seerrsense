@@ -1,0 +1,192 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Your Seerr — SeerrSense</title>
+<meta name="robots" content="noindex">
+<link rel="icon" type="image/svg+xml" href="/favicon.svg">
+<link rel="stylesheet" href="/assets/tokens.css">
+<link rel="stylesheet" href="https://ui.mctl.ai/mctl.css">
+<link rel="stylesheet" href="/assets/components.css">
+<style>
+  main { max-width: 560px; margin: 0 auto; padding: 56px 24px 96px; }
+  .field { margin-bottom: 20px; }
+  .field label { display: block; margin-bottom: 6px; font-size: 14px; font-weight: 500; }
+  .field input {
+    width: 100%; padding: 11px 13px; font: inherit; font-size: 15px;
+    color: var(--surface-fg); background: var(--surface-elevated);
+    border: 1px solid var(--surface-line-strong); border-radius: var(--mctl-radius-md);
+  }
+  .field input:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+  .hint { margin: 6px 0 0; font-size: 13px; color: var(--surface-fg-subtle); }
+  .status {
+    margin: 0 0 28px; padding: 14px 16px; border-radius: var(--mctl-radius-md);
+    border: 1px solid var(--surface-line-strong); background: var(--surface-card);
+    font-size: 15px;
+  }
+  .status.is-ok { border-color: var(--status-ok); }
+  .status.is-bad { border-color: var(--accent); }
+  .row { display: flex; flex-wrap: wrap; gap: 12px; margin-top: 8px; }
+  [hidden] { display: none !important; }
+</style>
+</head>
+<body>
+<header class="wrap topbar">
+  <a class="brand" href="/">SeerrSense</a>
+  <nav class="topbar-links"><a href="/">Home</a></nav>
+</header>
+
+<main>
+  <p class="eyebrow">Your account</p>
+  <h2>Connect your Seerr</h2>
+
+  <div id="signed-out">
+    <p class="lead">Sign in to attach your own Overseerr or Jellyseerr. SeerrSense will then
+      search and request on that instance instead of the shared one.</p>
+    <div class="row">
+      <a class="btn btn-primary" id="sign-in" href="#">Continue with Google</a>
+    </div>
+    <p class="hint" id="sign-in-note"></p>
+  </div>
+
+  <div id="signed-in" hidden>
+    <p class="status" id="status">Loading…</p>
+
+    <form id="connection">
+      <div class="field">
+        <label for="seerr-url">Seerr address</label>
+        <input id="seerr-url" name="seerrUrl" type="url" inputmode="url" required
+               placeholder="https://media.example.com" autocomplete="off">
+        <p class="hint">The address you open Overseerr or Jellyseerr at.</p>
+      </div>
+      <div class="field">
+        <label for="api-key">API key</label>
+        <input id="api-key" name="apiKey" type="password" required
+               placeholder="Leave blank to keep the saved key" autocomplete="off">
+        <p class="hint">Overseerr: Settings, then General, then API Key. Stored encrypted and never shown again.</p>
+      </div>
+      <details class="field">
+        <summary>Behind Cloudflare Zero Trust?</summary>
+        <div class="field" style="margin-top:14px">
+          <label for="cf-id">CF-Access-Client-Id</label>
+          <input id="cf-id" name="cfAccessClientId" type="text" autocomplete="off">
+        </div>
+        <div class="field">
+          <label for="cf-secret">CF-Access-Client-Secret</label>
+          <input id="cf-secret" name="cfAccessClientSecret" type="password" autocomplete="off">
+        </div>
+      </details>
+      <div class="row">
+        <button class="btn btn-primary" type="submit">Test and save</button>
+        <button class="btn btn-secondary" type="button" id="disconnect" hidden>Disconnect</button>
+      </div>
+    </form>
+  </div>
+</main>
+
+<script>
+(function () {
+  var signedOut = document.getElementById("signed-out");
+  var signedIn = document.getElementById("signed-in");
+  var status = document.getElementById("status");
+  var form = document.getElementById("connection");
+  var disconnect = document.getElementById("disconnect");
+
+  function show(message, kind) {
+    status.textContent = message;
+    status.className = "status" + (kind ? " is-" + kind : "");
+  }
+
+  // PKCE, in the browser: this page is a public client like any other, and the
+  // verifier never leaves it.
+  function base64url(bytes) {
+    var s = btoa(String.fromCharCode.apply(null, new Uint8Array(bytes)));
+    return s.replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+  }
+  async function beginSignIn() {
+    var verifier = base64url(crypto.getRandomValues(new Uint8Array(48)));
+    var digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(verifier));
+    sessionStorage.setItem("seerrsense-verifier", verifier);
+    var url = new URL("/oauth/authorize", location.origin);
+    url.searchParams.set("client_id", location.origin + "/account");
+    url.searchParams.set("redirect_uri", location.origin + "/account/callback");
+    url.searchParams.set("response_type", "code");
+    url.searchParams.set("code_challenge", base64url(digest));
+    url.searchParams.set("code_challenge_method", "S256");
+    url.searchParams.set("scope", "seerr:read");
+    location.href = url.toString();
+  }
+  document.getElementById("sign-in").addEventListener("click", function (event) {
+    event.preventDefault();
+    beginSignIn();
+  });
+
+  function showSignedOut(message) {
+    signedOut.hidden = false;
+    signedIn.hidden = true;
+    if (message) {
+      document.getElementById("sign-in-note").textContent = message;
+      document.getElementById("sign-in").hidden = true;
+    }
+  }
+
+  async function load() {
+    var response = await fetch("/api/v1/account/connection", { credentials: "same-origin" });
+    if (response.status === 401) return showSignedOut();
+    // Anything else means this server cannot sign anybody in — no OAuth
+    // configured, so the route is not even registered. Saying so beats
+    // rendering a form addressed to nobody.
+    if (!response.ok) {
+      return showSignedOut("Sign-in is not enabled on this server. It is using a shared token.");
+    }
+    var body = await response.json();
+    signedOut.hidden = true;
+    signedIn.hidden = false;
+    if (body.connected) {
+      show("Signed in as " + body.email + ". Connected to " + body.seerrUrl + ".", "ok");
+      document.getElementById("seerr-url").value = body.seerrUrl;
+      disconnect.hidden = false;
+    } else {
+      show("Signed in as " + body.email + ". Using the shared Seerr until you attach your own.");
+      disconnect.hidden = true;
+    }
+  }
+
+  form.addEventListener("submit", async function (event) {
+    event.preventDefault();
+    show("Checking…");
+    var payload = {
+      seerrUrl: form.seerrUrl.value.trim(),
+      apiKey: form.apiKey.value,
+      cfAccessClientId: form.cfAccessClientId.value.trim() || undefined,
+      cfAccessClientSecret: form.cfAccessClientSecret.value || undefined,
+    };
+    var response = await fetch("/api/v1/account/connection", {
+      method: "PUT",
+      credentials: "same-origin",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(payload),
+    });
+    var body = await response.json();
+    if (!response.ok) {
+      show(body.error || "Could not reach that Seerr.", "bad");
+      return;
+    }
+    form.apiKey.value = "";
+    show("Connected to " + body.seerrUrl + (body.seerrUser ? " as " + body.seerrUser : "") + ".", "ok");
+    disconnect.hidden = false;
+  });
+
+  disconnect.addEventListener("click", async function () {
+    await fetch("/api/v1/account/connection", { method: "DELETE", credentials: "same-origin" });
+    form.reset();
+    disconnect.hidden = true;
+    show("Disconnected. Using the shared Seerr again.");
+  });
+
+  load();
+})();
+</script>
+</body>
+</html>

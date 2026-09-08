@@ -1,0 +1,52 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Signing in — SeerrSense</title>
+<meta name="robots" content="noindex">
+<link rel="stylesheet" href="/assets/tokens.css">
+<link rel="stylesheet" href="/assets/components.css">
+<style>main { max-width: 460px; margin: 0 auto; padding: 96px 24px; }</style>
+</head>
+<body>
+<main class="wrap">
+  <p class="eyebrow">SeerrSense</p>
+  <h2 id="message">Finishing sign-in…</h2>
+  <p class="lead" id="detail">One moment.</p>
+</main>
+<script>
+(function () {
+  // The PKCE verifier never left the browser, so the exchange is finished from
+  // here; the server answers with a session cookie and nothing else.
+  var params = new URLSearchParams(location.search);
+  var code = params.get("code");
+  var verifier = sessionStorage.getItem("seerrsense-verifier");
+  sessionStorage.removeItem("seerrsense-verifier");
+
+  function fail(text) {
+    document.getElementById("message").textContent = "Sign-in did not finish";
+    document.getElementById("detail").textContent = text;
+  }
+
+  if (!code || !verifier) {
+    fail("Start again from the account page.");
+  } else {
+    fetch("/account/session", {
+      method: "POST",
+      credentials: "same-origin",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ code: code, codeVerifier: verifier }),
+    })
+      .then(function (response) {
+        if (!response.ok) throw new Error("exchange failed");
+        location.replace("/account");
+      })
+      .catch(function () {
+        fail("Start again from the account page.");
+      });
+  }
+})();
+</script>
+</body>
+</html>

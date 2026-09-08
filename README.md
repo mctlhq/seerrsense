@@ -123,6 +123,17 @@ Setting some but not all is refused at startup.
 
 ## Whose Seerr
 
+A person signs in at `/account` with the same Google account, enters the
+address and API key of their Overseerr or Jellyseerr, and the page checks the
+credentials against that instance before storing them. The key is never typed
+into a chat and never returned by the API, not even masked.
+
+The page authenticates with a short-lived session cookie, deliberately not with
+an MCP access token: an assistant holding a token must not be able to read or
+rewrite which Seerr it talks to. The two credentials carry different audiences,
+so neither works in place of the other.
+
+
 Each signed-in person can attach their own Overseerr or Jellyseerr; their API
 key is sealed with AES-256-GCM before it is stored and never leaves this server.
 Resolution order for a request:
