@@ -6,8 +6,14 @@ import { MediaRequestService } from "../api/service.js";
 import { MediaResolver } from "../api/resolver/index.js";
 import { NebiusIntentExtractor } from "../api/resolver/intent.js";
 import { config } from "../core/config.js";
+import { SCOPE_REQUEST } from "../auth/config.js";
 
-export function createSeerrSenseMcpServer() {
+/**
+ * `scopes` is the authenticated caller's granted scopes, when the request came
+ * through the OAuth gate. `undefined` means no authorization context at all —
+ * stdio mode, where the client owns the process and there is nothing to scope.
+ */
+export function createSeerrSenseMcpServer(scopes?: string[]) {
   const mcpServer = new McpServer({
     name: "SeerrSense",
     version: "1.0.0"
@@ -94,6 +100,15 @@ export function createSeerrSenseMcpServer() {
       })
     },
     async (payload) => {
+      // Reading the catalogue and asking the household to download something
+      // are different privileges, so the write tool checks its own scope
+      // rather than trusting the transport to have gated it.
+      if (scopes && !scopes.includes(SCOPE_REQUEST)) {
+        return {
+          isError: true,
+          content: [{ type: "text", text: `this token is not granted the ${SCOPE_REQUEST} scope` }]
+        };
+      }
       try {
         const result = await mediaService.requestMediaSafely(payload);
         return {

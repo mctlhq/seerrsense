@@ -1,0 +1,375 @@
+import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
+import { z } from "zod";
+import { ClientResolutionError, ClientResolver, isAllowedRedirectUri } from "./clients.js";
+import { SCOPE_READ, SUPPORTED_SCOPES, type OAuthConfig } from "./config.js";
+import { hashToken, isValidPkceString, randomToken, verifyPkceS256 } from "./crypto.js";
+import { GoogleOidc } from "./google.js";
+import type { AuthStore } from "./store.js";
+import { signAccessToken } from "./tokens.js";
+
+const AUTH_CODE_TTL_MS = 10 * 60 * 1000;
+const PENDING_TTL_MS = 10 * 60 * 1000;
+
+/**
+ * Bounds on every client-controlled string on the unauthenticated authorize
+ * endpoint. Without them a caller chooses how much memory a pending login
+ * costs. state is generous because OpenAI's Apps client packs a relay blob
+ * into it.
+ */
+const AuthorizeQuerySchema = z.object({
+  client_id: z.string().min(1).max(2048),
+  redirect_uri: z.string().min(1).max(2048),
+  response_type: z.literal("code"),
+  code_challenge: z.string().min(43).max(128),
+  code_challenge_method: z.literal("S256"),
+  state: z.string().max(4096).optional(),
+  scope: z.string().max(1024).optional(),
+  resource: z.string().max(2048).optional(),
+  login_hint: z.string().max(320).optional(),
+});
+
+const TokenBodySchema = z.object({
+  grant_type: z.enum(["authorization_code", "refresh_token"]),
+  code: z.string().max(2048).optional(),
+  redirect_uri: z.string().max(2048).optional(),
+  client_id: z.string().max(2048).optional(),
+  code_verifier: z.string().max(128).optional(),
+  refresh_token: z.string().max(2048).optional(),
+  resource: z.string().max(2048).optional(),
+});
+
+function oauthError(reply: FastifyReply, status: number, error: string, description: string) {
+  return reply.status(status).send({ error, error_description: description });
+}
+
+/** Errors that reach the client through its redirect_uri, per RFC 6749 §4.1.2.1. */
+function redirectError(
+  reply: FastifyReply,
+  redirectUri: string,
+  error: string,
+  description: string,
+  state: string | undefined,
+  issuer: string,
+) {
+  const url = new URL(redirectUri);
+  url.searchParams.set("error", error);
+  url.searchParams.set("error_description", description);
+  if (state !== undefined) url.searchParams.set("state", state);
+  // RFC 9207: name the authorization server in every response so a client
+  // talking to several cannot be fed a code minted by a different one.
+  url.searchParams.set("iss", issuer);
+  return reply.redirect(url.toString(), 302);
+}
+
+export function registerOAuthRoutes(
+  fastify: FastifyInstance,
+  config: OAuthConfig,
+  store: AuthStore,
+  deps: { fetchImpl?: typeof fetch } = {},
+) {
+  // RFC 6749 §4.1.3 defines the token request as form-encoded, and that is what
+  // real clients send. Fastify parses only JSON out of the box, so without this
+  // every token request would be refused with a content-type error.
+  fastify.addContentTypeParser(
+    "application/x-www-form-urlencoded",
+    { parseAs: "string", bodyLimit: 64 * 1024 },
+    (_request, body, done) => {
+      try {
+        done(null, Object.fromEntries(new URLSearchParams(body as string)));
+      } catch (error) {
+        done(error as Error, undefined);
+      }
+    },
+  );
+
+  const google = new GoogleOidc(
+    config.googleClientId,
+    config.googleClientSecret,
+    config.googleRedirectUri,
+    deps.fetchImpl ?? fetch,
+  );
+  const clients = new ClientResolver(config.preRegisteredClients, deps.fetchImpl ?? fetch);
+
+  // RFC 8414. registration_endpoint is deliberately absent: Dynamic Client
+  // Registration is deprecated in MCP 2026-07-28 in favour of Client ID
+  // Metadata Documents, which is what the flag below advertises.
+  const authorizationServerMetadata = {
+    issuer: config.issuer,
+    authorization_endpoint: `${config.issuer}/oauth/authorize`,
+    token_endpoint: `${config.issuer}/oauth/token`,
+    revocation_endpoint: `${config.issuer}/oauth/revoke`,
+    response_types_supported: ["code"],
+    grant_types_supported: ["authorization_code", "refresh_token"],
+    code_challenge_methods_supported: ["S256"],
+    token_endpoint_auth_methods_supported: ["none"],
+    scopes_supported: [...SUPPORTED_SCOPES],
+    client_id_metadata_document_supported: true,
+    authorization_response_iss_parameter_supported: true,
+  };
+
+  // RFC 9728. Served at both the bare path and the /mcp-suffixed one, because
+  // a client derives the URL from the resource it was refused access to.
+  const protectedResourceMetadata = {
+    resource: config.resource,
+    authorization_servers: [config.issuer],
+    scopes_supported: [...SUPPORTED_SCOPES],
+    bearer_methods_supported: ["header"],
+    resource_name: "SeerrSense",
+  };
+
+  for (const path of [
+    "/.well-known/oauth-authorization-server",
+    "/.well-known/oauth-authorization-server/mcp",
+  ]) {
+    fastify.get(path, async (_request, reply) =>
+      reply.header("cache-control", "public, max-age=3600").send(authorizationServerMetadata),
+    );
+  }
+
+  for (const path of [
+    "/.well-known/oauth-protected-resource",
+    "/.well-known/oauth-protected-resource/mcp",
+  ]) {
+    fastify.get(path, async (_request, reply) =>
+      reply.header("cache-control", "public, max-age=3600").send(protectedResourceMetadata),
+    );
+  }
+
+  fastify.get("/oauth/authorize", async (request: FastifyRequest, reply: FastifyReply) => {
+    const query = AuthorizeQuerySchema.safeParse(request.query);
+    if (!query.success) {
+      // Nothing is redirected here: the redirect_uri is not trusted until the
+      // client is resolved, so an invalid request answers on this connection.
+      return oauthError(reply, 400, "invalid_request", query.error.issues[0]?.message ?? "invalid request");
+    }
+    const params = query.data;
+
+    let client;
+    try {
+      client = await clients.resolve(params.client_id);
+    } catch (error) {
+      const description =
+        error instanceof ClientResolutionError ? error.message : "client_id could not be resolved";
+      return oauthError(reply, 400, "invalid_client", description);
+    }
+    if (!isAllowedRedirectUri(client, params.redirect_uri)) {
+      return oauthError(
+        reply,
+        400,
+        "invalid_request",
+        "redirect_uri is not listed for this client",
+      );
+    }
+
+    if (params.resource && params.resource !== config.resource) {
+      return redirectError(reply, params.redirect_uri, "invalid_target",
+        `this server only issues tokens for ${config.resource}`, params.state, config.issuer);
+    }
+
+    const requested = (params.scope ?? SCOPE_READ).split(/\s+/).filter(Boolean);
+    const unknown = requested.filter((scope) => !SUPPORTED_SCOPES.includes(scope as never));
+    if (unknown.length > 0) {
+      return redirectError(reply, params.redirect_uri, "invalid_scope",
+        `unsupported scope: ${unknown.join(" ")}`, params.state, config.issuer);
+    }
+
+    const state = randomToken();
+    const googleVerifier = randomToken() + randomToken().slice(0, 11); // 43-128 chars
+    const googleNonce = randomToken();
+    await store.putPendingAuth({
+      state,
+      clientId: client.clientId,
+      redirectUri: params.redirect_uri,
+      clientState: params.state,
+      codeChallenge: params.code_challenge,
+      scope: requested.join(" "),
+      resource: config.resource,
+      googleVerifier,
+      googleNonce,
+      expiresAt: Date.now() + PENDING_TTL_MS,
+    });
+
+    const url = await google.authorizationUrl({
+      state,
+      codeVerifier: googleVerifier,
+      nonce: googleNonce,
+      loginHint: params.login_hint,
+    });
+    return reply.redirect(url, 302);
+  });
+
+  fastify.get("/oauth/google/callback", async (request: FastifyRequest, reply: FastifyReply) => {
+    const query = request.query as Record<string, string | undefined>;
+    if (!query.state) return oauthError(reply, 400, "invalid_request", "state is missing");
+
+    const pending = await store.takePendingAuth(query.state);
+    if (!pending) {
+      return oauthError(reply, 400, "invalid_request", "this login has expired or was already used");
+    }
+    if (query.error) {
+      return redirectError(reply, pending.redirectUri, "access_denied",
+        `Google returned ${query.error}`, pending.clientState, config.issuer);
+    }
+    if (!query.code) {
+      return redirectError(reply, pending.redirectUri, "invalid_request",
+        "Google returned no code", pending.clientState, config.issuer);
+    }
+
+    let identity;
+    try {
+      identity = await google.exchangeCode(query.code, pending.googleVerifier, pending.googleNonce);
+    } catch (error) {
+      request.log.warn({ err: error }, "Google authentication failed");
+      return redirectError(reply, pending.redirectUri, "access_denied",
+        "Google authentication failed", pending.clientState, config.issuer);
+    }
+
+    // Fail closed: an empty allowlist admits nobody, so a missing environment
+    // variable cannot silently open the server to every Google account.
+    if (!config.allowedEmails.has(identity.email)) {
+      request.log.warn({ email: identity.email }, "rejected a Google account outside the allowlist");
+      return redirectError(reply, pending.redirectUri, "access_denied",
+        "this account is not allowed to use this server", pending.clientState, config.issuer);
+    }
+
+    const code = randomToken();
+    await store.putAuthCode({
+      code,
+      clientId: pending.clientId,
+      redirectUri: pending.redirectUri,
+      codeChallenge: pending.codeChallenge,
+      scope: pending.scope,
+      resource: pending.resource,
+      subject: `google:${identity.subject}`,
+      email: identity.email,
+      expiresAt: Date.now() + AUTH_CODE_TTL_MS,
+    });
+
+    const url = new URL(pending.redirectUri);
+    url.searchParams.set("code", code);
+    if (pending.clientState !== undefined) url.searchParams.set("state", pending.clientState);
+    url.searchParams.set("iss", config.issuer);
+    return reply.redirect(url.toString(), 302);
+  });
+
+  fastify.post("/oauth/token", async (request: FastifyRequest, reply: FastifyReply) => {
+    const body = TokenBodySchema.safeParse(request.body ?? {});
+    if (!body.success) {
+      return oauthError(reply, 400, "invalid_request", body.error.issues[0]?.message ?? "invalid request");
+    }
+    const params = body.data;
+
+    if (params.grant_type === "authorization_code") {
+      if (!params.code || !params.code_verifier || !params.redirect_uri) {
+        return oauthError(reply, 400, "invalid_request",
+          "code, code_verifier and redirect_uri are required");
+      }
+      if (!isValidPkceString(params.code_verifier)) {
+        return oauthError(reply, 400, "invalid_grant", "code_verifier is malformed");
+      }
+      const record = await store.takeAuthCode(params.code);
+      if (!record) return oauthError(reply, 400, "invalid_grant", "this code is unknown or expired");
+      if (params.client_id && params.client_id !== record.clientId) {
+        return oauthError(reply, 400, "invalid_grant", "this code was issued to another client");
+      }
+      if (params.redirect_uri !== record.redirectUri) {
+        return oauthError(reply, 400, "invalid_grant", "redirect_uri does not match the code");
+      }
+      if (!verifyPkceS256(params.code_verifier, record.codeChallenge)) {
+        return oauthError(reply, 400, "invalid_grant", "code_verifier does not match the challenge");
+      }
+      return issueTokens(reply, {
+        clientId: record.clientId,
+        scope: record.scope,
+        resource: record.resource,
+        subject: record.subject,
+        email: record.email,
+        familyId: randomToken(),
+      });
+    }
+
+    if (!params.refresh_token) {
+      return oauthError(reply, 400, "invalid_request", "refresh_token is required");
+    }
+    const tokenHash = hashToken(params.refresh_token);
+    const record = await store.getRefreshToken(tokenHash);
+    if (!record || record.expiresAt < Date.now()) {
+      return oauthError(reply, 400, "invalid_grant", "this refresh token is unknown or expired");
+    }
+    if (record.consumedAt !== undefined) {
+      // A rotated token presented a second time means the holder is not the
+      // only one with it. Nothing in this family can be trusted any more.
+      await store.revokeFamily(record.familyId);
+      request.log.warn({ familyId: record.familyId }, "refresh token replayed; revoked the family");
+      return oauthError(reply, 400, "invalid_grant", "this refresh token was already used");
+    }
+    if (params.client_id && params.client_id !== record.clientId) {
+      return oauthError(reply, 400, "invalid_grant", "this token was issued to another client");
+    }
+    await store.markRefreshConsumed(tokenHash);
+    return issueTokens(reply, {
+      clientId: record.clientId,
+      scope: record.scope,
+      resource: record.resource,
+      subject: record.subject,
+      email: record.email,
+      familyId: record.familyId,
+    });
+  });
+
+  fastify.post("/oauth/revoke", async (request: FastifyRequest, reply: FastifyReply) => {
+    const body = (request.body ?? {}) as { token?: string };
+    // RFC 7009: an unknown token is not an error, so revocation cannot be used
+    // to probe which tokens exist.
+    if (typeof body.token === "string" && body.token.length > 0) {
+      const hash = hashToken(body.token);
+      const record = await store.getRefreshToken(hash);
+      if (record) await store.revokeFamily(record.familyId);
+      else await store.revokeToken(hash);
+    }
+    return reply.status(200).send({});
+  });
+
+  async function issueTokens(
+    reply: FastifyReply,
+    grant: {
+      clientId: string;
+      scope: string;
+      resource: string;
+      subject: string;
+      email: string;
+      familyId: string;
+    },
+  ) {
+    const access = await signAccessToken({
+      key: config.signingKey,
+      issuer: config.issuer,
+      audience: grant.resource,
+      subject: grant.subject,
+      email: grant.email,
+      scope: grant.scope,
+      clientId: grant.clientId,
+      ttlSeconds: config.accessTokenTtl,
+    });
+    const refreshToken = randomToken();
+    await store.putRefreshToken({
+      tokenHash: hashToken(refreshToken),
+      familyId: grant.familyId,
+      clientId: grant.clientId,
+      scope: grant.scope,
+      resource: grant.resource,
+      subject: grant.subject,
+      email: grant.email,
+      expiresAt: Date.now() + config.refreshTokenTtl * 1000,
+    });
+    return reply
+      .header("cache-control", "no-store")
+      .send({
+        access_token: access.token,
+        token_type: "Bearer",
+        expires_in: config.accessTokenTtl,
+        refresh_token: refreshToken,
+        scope: grant.scope,
+      });
+  }
+}
