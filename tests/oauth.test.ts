@@ -410,12 +410,12 @@ describe("authorization code flow", () => {
 describe("public web surface", () => {
   it("leaves the landing-page paths open and everything else closed", async () => {
     const app = await makeApp();
-    // No landing page yet (#6); what matters is that the gate does not answer
-    // 401 for it, and that "/" is not a prefix that opens the whole server.
+    // The web surface must never meet the token gate...
     for (const path of ["/", "/favicon.svg", "/og.png", "/assets/tokens.css"]) {
       const response = await app.inject({ method: "GET", url: path });
-      expect(response.statusCode, path).toBe(404);
+      expect(response.statusCode, path).toBe(200);
     }
+    // ...and "/" must not be a prefix that opens everything beneath it.
     for (const path of ["/api/v1/search?query=x", "/mcp"]) {
       const response = await app.inject({ method: "GET", url: path });
       expect(response.statusCode, path).toBe(401);
