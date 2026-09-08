@@ -1,13 +1,17 @@
 import { z } from "zod";
 import dotenv from "dotenv";
 
-dotenv.config();
+// quiet: dotenv 17 prints an "injected env" banner to stdout, which would corrupt
+// the JSON-RPC channel in stdio mode.
+dotenv.config({ quiet: true });
 
 const ConfigSchema = z.object({
   SEERR_URL: z.string().url().default("http://127.0.0.1:5055"),
   SEERR_API_KEY: z.string().min(1, "SEERR_API_KEY is required"),
   SEERRSENSE_LOCALE: z.string().default("en-US"),
-  SEERRSENSE_AUTH_TOKEN: z.string().min(1, "SEERRSENSE_AUTH_TOKEN is required"),
+  // Required for the HTTP server (enforced by assertHttpConfig), not for stdio mode
+  // where the MCP client owns the process and there is no network surface.
+  SEERRSENSE_AUTH_TOKEN: z.string().min(1).optional(),
   PORT: z.coerce.number().default(8787),
   NEBIUS_API_KEY: z.string().min(1).optional(),
   NEBIUS_MODEL: z.string().optional(),
@@ -21,12 +25,22 @@ export function parseConfig(env: Record<string, string | undefined>): Config {
   return ConfigSchema.parse(env);
 }
 
+export type HttpConfig = Config & { SEERRSENSE_AUTH_TOKEN: string };
+
+/** HTTP mode exposes /mcp and /api on the network, so the bearer token is mandatory. */
+export function assertHttpConfig(cfg: Config): HttpConfig {
+  if (!cfg.SEERRSENSE_AUTH_TOKEN) {
+    throw new Error("SEERRSENSE_AUTH_TOKEN is required when running the HTTP server");
+  }
+  return cfg as HttpConfig;
+}
+
 let config: Config;
 
 try {
   config = parseConfig(process.env);
 } catch (err: any) {
-  console.error("Invalid configuration:", err.errors || err.message);
+  console.error("Invalid configuration:", err.issues ?? err.message);
   process.exit(1);
 }
 

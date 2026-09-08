@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { SeerrClient } from "../src/providers/seerr/client.js";
+import { config } from "../src/core/config.js";
 
 global.fetch = vi.fn();
 
@@ -79,5 +80,32 @@ describe("SeerrClient", () => {
 
     await client.requestMedia("tv", 124);
     expect(capturedBody).toEqual({ mediaType: "tv", mediaId: 124, seasons: "all" });
+  });
+
+  it("should send Cloudflare Access headers only when configured", async () => {
+    const captured: Record<string, string>[] = [];
+    (global.fetch as any).mockImplementation(async (_url: string, options: any) => {
+      captured.push(options.headers);
+      return { ok: true, json: async () => ({ results: [] }) };
+    });
+
+    const saved = { id: config.CF_ACCESS_CLIENT_ID, secret: config.CF_ACCESS_CLIENT_SECRET };
+    try {
+      config.CF_ACCESS_CLIENT_ID = undefined;
+      config.CF_ACCESS_CLIENT_SECRET = undefined;
+      await client.search("x");
+      expect(captured[0]).not.toHaveProperty("CF-Access-Client-Id");
+      expect(captured[0]).not.toHaveProperty("CF-Access-Client-Secret");
+
+      config.CF_ACCESS_CLIENT_ID = "cf-id";
+      config.CF_ACCESS_CLIENT_SECRET = "cf-secret";
+      await client.search("x");
+      expect(captured[1]["CF-Access-Client-Id"]).toBe("cf-id");
+      expect(captured[1]["CF-Access-Client-Secret"]).toBe("cf-secret");
+      expect(captured[1]["X-Api-Key"]).toBe("key");
+    } finally {
+      config.CF_ACCESS_CLIENT_ID = saved.id;
+      config.CF_ACCESS_CLIENT_SECRET = saved.secret;
+    }
   });
 });
