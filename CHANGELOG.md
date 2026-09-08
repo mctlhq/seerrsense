@@ -1,5 +1,15 @@
 # Changelog
 
+## [1.2.0](https://github.com/mctlhq/seerrsense/compare/1.1.0...1.2.0) (2026-09-08)
+
+
+### Features
+
+* **auth:** OAuth 2.1 for /mcp with Google as the identity provider ([73a22d9](https://github.com/mctlhq/seerrsense/commit/73a22d9655973adb1ed7f2b537de6e1335f2856d))
+* **auth:** OAuth 2.1 for /mcp with Google as the identity provider ([5bd2b02](https://github.com/mctlhq/seerrsense/commit/5bd2b023b3d20ef171c47816e0f62f4172ceea13)), closes [#8](https://github.com/mctlhq/seerrsense/issues/8)
+* **web:** add the SeerrSense landing page ([94f3a1c](https://github.com/mctlhq/seerrsense/commit/94f3a1c1c2b8e99551758147c63b84928f77cd53))
+* **web:** add the SeerrSense landing page ([c54d90e](https://github.com/mctlhq/seerrsense/commit/c54d90e717c15fccff6ca5ed2c99513447250972)), closes [#6](https://github.com/mctlhq/seerrsense/issues/6)
+
 ## [1.1.0](https://github.com/mctlhq/seerrsense/compare/1.0.5...1.1.0) (2026-09-08)
 
 
