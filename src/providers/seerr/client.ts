@@ -90,8 +90,23 @@ export class SeerrClient {
     return isNaN(year) ? undefined : year;
   }
 
+  /**
+   * Overseerr answers 400 Bad Request to any search term containing
+   * parentheses — measured against the live instance, where "The Matrix (1999)"
+   * fails and "The Matrix" returns twenty results, at any length. A year in
+   * parentheses is the most natural way both a person and a language model
+   * write a title, so the term is stripped of parenthesised spans rather than
+   * allowed to become a hard error. Nothing is lost: Overseerr would not have
+   * matched a title on that annotation anyway.
+   */
+  static searchTerm(query: string): string {
+    return query.replace(/\([^)]*\)?/g, " ").replace(/\s+/g, " ").trim();
+  }
+
   async search(query: string): Promise<MediaCandidate[]> {
-    const rawData = await this.fetch(`/api/v1/search?query=${encodeURIComponent(query)}`);
+    const term = SeerrClient.searchTerm(query);
+    if (term === "") return [];
+    const rawData = await this.fetch(`/api/v1/search?query=${encodeURIComponent(term)}`);
     const data = SeerrSearchResponseSchema.parse(rawData);
     const results: MediaCandidate[] = [];
 
