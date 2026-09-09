@@ -1,5 +1,19 @@
 # Changelog
 
+## [1.8.0](https://github.com/mctlhq/seerrsense/compare/1.7.0...1.8.0) (2026-09-09)
+
+
+### Features
+
+* **agents:** issue-49-account-the-page-promises-a-shared-seerr ([1ef1841](https://github.com/mctlhq/seerrsense/commit/1ef18410eb4377b71cb4a531b201e4e4ff16cfed))
+
+
+### Bug Fixes
+
+* **account:** tell the person when signing out did not work ([820bc39](https://github.com/mctlhq/seerrsense/commit/820bc392e29b2bb385097a2bb548f0c02ca8cef5))
+* make householdFallback the only admission rule, and stop the disconnect handler claiming success ([742375e](https://github.com/mctlhq/seerrsense/commit/742375eb9a77a2fb225b345a112fc46addf574a3))
+* report the real household fallback and add account sign-out ([7e3b854](https://github.com/mctlhq/seerrsense/commit/7e3b8540fecf14107966b6b972394c26df2da42b))
+
 ## [1.7.0](https://github.com/mctlhq/seerrsense/compare/1.6.0...1.7.0) (2026-09-09)
 
 
