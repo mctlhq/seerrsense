@@ -1,5 +1,13 @@
 # Changelog
 
+## [1.4.1](https://github.com/mctlhq/seerrsense/compare/1.4.0...1.4.1) (2026-09-09)
+
+
+### Bug Fixes
+
+* resolve the MCP tenant from AuthInfo instead of the Node request ([4b56f54](https://github.com/mctlhq/seerrsense/commit/4b56f54aa71669c62d96c9dda3e239bf8125376b))
+* resolve the MCP tenant from AuthInfo instead of the Node request ([84362b2](https://github.com/mctlhq/seerrsense/commit/84362b2ceba598abf4697a0d7ad646a6daadf28f))
+
 ## [1.4.0](https://github.com/mctlhq/seerrsense/compare/1.3.0...1.4.0) (2026-09-09)
 
 
