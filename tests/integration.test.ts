@@ -125,3 +125,34 @@ test("MCP POST /mcp listTools", async () => {
   expect(tools.find((t: any) => t.name === "request_media")).toBeDefined();
   expect(tools.find((t: any) => t.name === "resolve_media")).toBeDefined();
 });
+
+// The tenant has to survive the trip into the MCP handler. It travels on the
+// AuthInfo, not on the Node request: the SDK hands the factory a WHATWG Request
+// rebuilt from the incoming one, so anything hung off `request.raw` is lost and
+// every tool call answers "no Seerr is connected". Only a call through /mcp
+// catches that — resolving the tenant in isolation always looked correct.
+test("a tool call over /mcp reaches the household Seerr", async () => {
+  householdSeerr.search.mockClear();
+  householdSeerr.search.mockResolvedValueOnce([{ id: 7, mediaType: "movie", title: "Arrival" }]);
+
+  const response = await app.inject({
+    method: "POST",
+    url: "/mcp",
+    headers: {
+      accept: "application/json, text/event-stream",
+      authorization: "Bearer secret123",
+    },
+    payload: {
+      jsonrpc: "2.0",
+      id: 3,
+      method: "tools/call",
+      params: { name: "search_media", arguments: { query: "arrival" } },
+    },
+  });
+
+  expect(response.statusCode).toBe(200);
+  const body = JSON.parse(response.payload.match(/data: ({.*})/)![1]);
+  expect(body.result.isError).toBeFalsy();
+  expect(body.result.content[0].text).toContain("Arrival");
+  expect(householdSeerr.search).toHaveBeenCalledWith("arrival");
+});

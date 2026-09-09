@@ -325,12 +325,16 @@ export function buildServer(deps: { store?: AuthStore; fetchImpl?: typeof fetch 
   });
 
   // MCP v2 Protocol 2026-07-28 compliant Streamable HTTP endpoint
-  // The factory runs per request and reads both the granted scopes and the
-  // resolved tenant off the same request object.
-  const handler = createMcpHandler((ctx) => {
-    const raw = ctx.requestInfo as unknown as { tenant?: Tenant } | undefined;
-    return createSeerrSenseMcpServer(ctx.authInfo?.scopes, raw?.tenant);
-  });
+  // The factory runs per request and resolves the tenant from the same
+  // AuthInfo the preHandler validated. It deliberately does not read the tenant
+  // the preHandler attached to request.raw: ctx.requestInfo is a WHATWG Request
+  // built from the Node request, not the Node request itself, so a property
+  // hung off request.raw is simply not there and every caller would silently
+  // look unconnected. Resolution is cached per subject, so this costs no extra
+  // database read on the hot path.
+  const handler = createMcpHandler(async (ctx) =>
+    createSeerrSenseMcpServer(ctx.authInfo?.scopes, await tenants.resolve(ctx.authInfo)),
+  );
   const nodeHandler = toNodeHandler(handler);
 
   fastify.all("/mcp", async (request, reply) => {
