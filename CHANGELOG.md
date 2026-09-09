@@ -1,5 +1,19 @@
 # Changelog
 
+## [1.4.0](https://github.com/mctlhq/seerrsense/compare/1.3.0...1.4.0) (2026-09-09)
+
+
+### Features
+
+* **web:** add the privacy and terms pages ([9daddec](https://github.com/mctlhq/seerrsense/commit/9daddecb8e121fb4398a02eb4b9ee7ebb35f775a))
+* **web:** add the privacy and terms pages ([33aa039](https://github.com/mctlhq/seerrsense/commit/33aa039e88313dde187803d2e131da1aa29d6466))
+
+
+### Bug Fixes
+
+* **auth:** register the account page as a client of this server ([9a9a9ad](https://github.com/mctlhq/seerrsense/commit/9a9a9ad326a2f1b48a6affb2b17b3d1f99b5eba5))
+* **auth:** register the account page as a client of this server ([503f144](https://github.com/mctlhq/seerrsense/commit/503f14420b4381c4f558d3a1eff674220a035b6a))
+
 ## [1.3.0](https://github.com/mctlhq/seerrsense/compare/1.2.0...1.3.0) (2026-09-09)
 
 
