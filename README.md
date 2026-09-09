@@ -159,11 +159,17 @@ the key is already theirs.
 endpoints are the only ones served without a token.
 
 There is no catch-all route: this is not a single-page app, and an undeclared
-path is never answered with the page. The tokens the page uses are served from
-this origin as `/assets/tokens.css`, so it stays readable when
-`https://ui.mctl.ai/mctl.css` cannot be reached; the CDN copy is loaded after it
-as the canonical source. The MCP endpoint shown on the page is derived from
-`window.location.origin`, so promoting a domain needs no change here.
+path is never answered with the page.
+
+The MCTL design tokens are vendored into `public/assets/tokens.css` by
+`npm run sync:tokens` and committed, so the page fetches no third-party
+stylesheet and cannot be restyled without a commit. `npm run check:tokens` runs
+in CI and fails when the committed copy no longer matches the design system, so
+an upstream change arrives as a diff to review rather than as a surprise on the
+site.
+
+The MCP endpoint shown on the page is derived from `window.location.origin`, so
+promoting a domain needs no change here.
 
 ## REST API
 *TBD*
