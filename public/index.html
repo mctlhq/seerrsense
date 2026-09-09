@@ -23,10 +23,11 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Onest:wght@400;500;600&family=JetBrains+Mono:wght@400;500;600&display=swap">
-<!-- Local tokens first so the page is correct if the CDN is unreachable, then
-     the canonical sheet, then this page's own components. -->
+<!-- The design tokens are vendored from a pinned @mctlhq/css by
+     scripts/sync-tokens.mjs, not fetched from the unversioned CDN sheet: that
+     URL always serves whatever is deployed, so a page could change without a
+     commit. Nothing here depends on a third-party origin. -->
 <link rel="stylesheet" href="/assets/tokens.css">
-<link rel="stylesheet" href="https://ui.mctl.ai/mctl.css">
 <link rel="stylesheet" href="/assets/components.css">
 </head>
 <body>
