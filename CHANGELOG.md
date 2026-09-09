@@ -1,5 +1,20 @@
 # Changelog
 
+## [1.7.0](https://github.com/mctlhq/seerrsense/compare/1.6.0...1.7.0) (2026-09-09)
+
+
+### Features
+
+* **agents:** issue-44-auth-public-mode-open-signup-household-o ([3943294](https://github.com/mctlhq/seerrsense/commit/3943294fe75ea8feabdefa34ef87311cac49218a))
+* **agents:** issue-45-docs-the-landing-page-instructs-a-bearer ([534f7c2](https://github.com/mctlhq/seerrsense/commit/534f7c223158f108bd339d01730fa20533e67493))
+* **auth:** open signup, owner-only household, SSRF guard, rate and model budgets ([9b68ba2](https://github.com/mctlhq/seerrsense/commit/9b68ba295b279c7d6b24720e82712177380167da))
+
+
+### Bug Fixes
+
+* close the re-review's P1 and two P2 findings ([845c393](https://github.com/mctlhq/seerrsense/commit/845c3935fb28ea85bc2f60fac4cfc577d5c2a5bf))
+* close the review's P1 and P2 findings ([2acbb14](https://github.com/mctlhq/seerrsense/commit/2acbb1465c2e787bce0857e3dadf690aa3b61766))
+
 ## [1.6.0](https://github.com/mctlhq/seerrsense/compare/1.5.0...1.6.0) (2026-09-09)
 
 
