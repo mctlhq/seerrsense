@@ -1,0 +1,53 @@
+/*
+ * Layout for the OAuth consent screen.
+ *
+ * This lives in a file rather than in a <style> block in the page because that
+ * page is served with `style-src 'self'`, which forbids inline styles. An
+ * inline block is dropped by the browser without an error anywhere the server
+ * can see: the linked stylesheets still load, so the page keeps its colours and
+ * type and looks merely broken rather than unstyled, which is why it survived
+ * review. Keep it here; do not move rules back into the page.
+ */
+main {
+  max-width: 460px;
+  margin: 0 auto;
+  padding: 64px 24px;
+}
+
+.who {
+  margin: 0 0 28px;
+  color: var(--surface-fg-muted);
+}
+
+.grants {
+  margin: 0 0 28px;
+  padding-left: 20px;
+  color: var(--surface-fg-muted);
+}
+
+.grants li {
+  margin-bottom: 8px;
+}
+
+.target {
+  display: block;
+  margin-top: 6px;
+  font-family: var(--font-mono);
+  font-size: 13px;
+  color: var(--surface-fg-subtle);
+  overflow-wrap: anywhere;
+}
+
+.actions {
+  display: flex;
+  gap: 12px;
+}
+
+.actions form {
+  flex: 1;
+}
+
+.actions button {
+  width: 100%;
+  justify-content: center;
+}

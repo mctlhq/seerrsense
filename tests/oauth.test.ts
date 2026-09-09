@@ -3,6 +3,7 @@ import { SignJWT, exportJWK, generateKeyPair, type CryptoKey } from "jose";
 
 const SIGNING_KEY = new TextEncoder().encode("x".repeat(48));
 import { createHash, randomBytes } from "node:crypto";
+import { existsSync } from "node:fs";
 
 // The household Seerr. Both the singleton and the factory are stubbed:
 // the server builds its default client through the factory now.
@@ -580,6 +581,53 @@ describe("consent", () => {
     expect(consent.payload).toContain("Request new films");
     // form-action must reach the client's host or the button does nothing.
     expect(consent.headers["content-security-policy"]).toContain("form-action 'self' https:");
+    await app.close();
+  });
+
+  it("carries no style the browser will drop, and links only stylesheets that exist", async () => {
+    const app = await makeApp();
+    const authorize = await app.inject({
+      method: "GET",
+      url: "/oauth/authorize",
+      query: {
+        client_id: CLIENT_ID,
+        redirect_uri: REDIRECT_URI,
+        response_type: "code",
+        code_challenge: challengeFor(makeVerifier()),
+        code_challenge_method: "S256",
+        scope: "seerr:read",
+      },
+    });
+    const googleUrl = new URL(authorize.headers.location as string);
+    lastGoogleNonce = googleUrl.searchParams.get("nonce") ?? undefined;
+    const consent = await app.inject({
+      method: "GET",
+      url: "/oauth/google/callback",
+      query: { code: "google-code", state: googleUrl.searchParams.get("state")! },
+    });
+    expect(consent.statusCode).toBe(200);
+
+    // style-src 'self' forbids an inline block. The failure is silent — the
+    // linked sheets still load, so the page keeps its colours and merely loses
+    // its layout, which is how it reached production looking broken.
+    // Compared as a whole directive, not as a substring: "style-src 'self'"
+    // occurs inside "style-src 'self' 'unsafe-inline'" too, and that spelling
+    // would permit exactly what this case exists to forbid.
+    const directives = String(consent.headers["content-security-policy"])
+      .split(";")
+      .map((directive) => directive.trim());
+    expect(directives).toContain("style-src 'self'");
+    expect(consent.payload).not.toMatch(/<style[\s>]/);
+    expect(consent.payload).not.toMatch(/\sstyle=/);
+
+    // Every sheet it does link has to be on disk, or the layout is gone the
+    // same way for a different reason.
+    const hrefs = [...consent.payload.matchAll(/<link[^>]+rel="stylesheet"[^>]+href="([^"]+)"/g)]
+      .map((match) => match[1]);
+    expect(hrefs).toContain("/assets/consent.css");
+    for (const href of hrefs) {
+      expect(existsSync(new URL(`../public${href}`, import.meta.url)), href).toBe(true);
+    }
     await app.close();
   });
 
