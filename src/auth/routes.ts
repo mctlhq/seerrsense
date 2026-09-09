@@ -121,7 +121,16 @@ function consentPage(params: {
 <main>
   <p class="eyebrow">Authorize</p>
   <h2>${escapeHtml(params.clientName)} wants to use SeerrSense</h2>
-  <p class="who">Signed in as ${escapeHtml(params.email)}.
+  <!-- Email Address Obfuscation is on zone-wide for this host and rewrites any
+       address it finds in an HTML response into a placeholder like
+       [email protected], relying on its own decode script to restore it in
+       the browser. That script never runs here: this response's CSP is
+       default-src 'none' with no script-src, so the placeholder is what a
+       visitor would see. The email_off markers below are Cloudflare's
+       documented origin-side opt-out for exactly this region. Do not remove
+       them, and do not add script-src to make the decoder work instead — that
+       would undo the point of the CSP above. -->
+  <p class="who">Signed in as <!--email_off-->${escapeHtml(params.email)}<!--/email_off-->.
     <span class="target">You will be returned to ${escapeHtml(params.redirectHost)}</span>
   </p>
   <ul class="grants">

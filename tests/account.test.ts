@@ -194,6 +194,29 @@ describe("the account page", () => {
     await app.close();
   });
 
+  it("delivers the address as JSON, never rendered into the page's HTML", async () => {
+    // Cloudflare's Email Address Obfuscation only rewrites addresses it finds
+    // in an HTML response body. This page is static and gets the address from
+    // the JSON API, writing it into the DOM with textContent after load — so
+    // the origin never renders it as HTML and obfuscation cannot touch it.
+    const app = await makeApp();
+    const cookie = await signIn(app);
+
+    const api = await app.inject({
+      method: "GET",
+      url: "/api/v1/account/connection",
+      headers: { cookie },
+    });
+    expect(api.statusCode).toBe(200);
+    expect(api.headers["content-type"]).toContain("application/json");
+
+    const page = await app.inject({ method: "GET", url: "/account", headers: { cookie } });
+    expect(page.statusCode).toBe(200);
+    expect(page.payload).not.toContain(ALLOWED_EMAIL);
+    expect(page.payload).not.toMatch(/[\w.+-]+@[\w-]+\.[\w.-]+/);
+    await app.close();
+  });
+
   it("resolves its own client without fetching anything", async () => {
     // The page's client_id is an https URL with a path, which the resolver
     // would otherwise treat as a metadata document and fetch — from a path that
