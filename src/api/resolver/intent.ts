@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { generateObject } from "ai";
+import { generateObject, NoObjectGeneratedError } from "ai";
 import { createOpenAICompatible } from "@ai-sdk/openai-compatible";
 import { config } from "../../core/config.js";
 
@@ -94,14 +94,30 @@ export class NebiusIntentExtractor implements IntentExtractor {
   }
 
   async extract(query: string): Promise<MediaIntent> {
-    const { object } = await generateObject({
-      model: this.model(this.modelName),
-      schema: MediaIntentSchema,
-      temperature: 0,
-      system: SYSTEM_PROMPT,
-      prompt: query,
-    });
+    try {
+      const { object } = await generateObject({
+        model: this.model(this.modelName),
+        schema: MediaIntentSchema,
+        temperature: 0,
+        system: SYSTEM_PROMPT,
+        prompt: query,
+        // A filled-in intent is a few dozen tokens. Asked "that film with the
+        // thing in it" the model instead ran to 8514 tokens without ever
+        // closing the object, the SDK retried, and the caller's request hung
+        // for minutes. These three bounds turn that into a fast, ordinary
+        // "could not determine which work this is".
+        maxOutputTokens: 400,
+        maxRetries: 1,
+        abortSignal: AbortSignal.timeout(20_000),
+      });
 
-    return object;
+      return object;
+    } catch (error) {
+      // The model failing to produce an intent is an answer: this query does
+      // not identify a work. A transport or credential failure is not, and
+      // must keep surfacing as an error rather than as a shrug.
+      if (NoObjectGeneratedError.isInstance(error)) return {};
+      throw error;
+    }
   }
 }

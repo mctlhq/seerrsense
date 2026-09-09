@@ -214,3 +214,16 @@ test("no ranking outcome reports the old 0.99", async () => {
   expect(result.confidence).toBeLessThan(0.9);
   expect(result.confidence).not.toBe(0.99);
 });
+
+// The model can fail to produce an intent at all. Asked "that film with the
+// thing in it" it ran to 8514 tokens without ever closing the JSON object, the
+// AI SDK retried, and the caller's request hung for minutes with no reply. An
+// extractor that returns nothing has to read as "could not determine which
+// work this is", promptly.
+test("an extractor that yields nothing produces an error, not a hang", async () => {
+  const query = "that film with the thing in it";
+  const client = seerr({ [query]: [] });
+  const resolver = new MediaResolver(client as any, extractorReturning({}));
+
+  await expect(resolver.resolveMedia(query)).rejects.toThrow("Could not determine a title hint");
+});
