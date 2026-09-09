@@ -36,7 +36,7 @@ describe("BudgetedIntentExtractor", () => {
     expect(inner.extract).toHaveBeenCalledTimes(2);
   });
 
-  it("still serves a second subject once the global ceiling is reached", async () => {
+  it("refuses a second subject once the global ceiling is reached", async () => {
     const inner = fakeExtractor();
     const store = new MemoryAuthStore();
     const options = { dailyLimit: 100, globalDailyLimit: 1 };

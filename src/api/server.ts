@@ -82,9 +82,17 @@ function isSessionRoute(url: string): boolean {
 
 function envInt(name: string, fallback: number): number {
   const raw = process.env[name];
-  if (!raw) return fallback;
+  if (raw === undefined || raw === "") return fallback;
   const parsed = Number(raw);
-  return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
+  // 0 is a legitimate setting, not a missing one: an operator shutting a
+  // limit off during an incident must not silently get the default back.
+  // Anything that is not a non-negative number is a typo worth shouting
+  // about rather than absorbing.
+  if (!Number.isFinite(parsed) || parsed < 0) {
+    console.warn(`${name}=${JSON.stringify(raw)} is not a non-negative number; using ${fallback}`);
+    return fallback;
+  }
+  return parsed;
 }
 
 /** Every window/ceiling here is retunable in gitops without a release. */
@@ -104,6 +112,13 @@ function rateLimitSettings() {
     subject: {
       max: envInt("SEERRSENSE_RATE_LIMIT_SUBJECT_MAX", 120),
       timeWindow: envInt("SEERRSENSE_RATE_LIMIT_SUBJECT_WINDOW_MS", 60 * 1000),
+    },
+    // Per IP, before authentication, on the token-guarded routes. Deliberately
+    // looser than the per-subject limit: this one exists so a caller who never
+    // authenticates is still metered, not to shape legitimate traffic.
+    gate: {
+      max: envInt("SEERRSENSE_RATE_LIMIT_GATE_MAX", 300),
+      timeWindow: envInt("SEERRSENSE_RATE_LIMIT_GATE_WINDOW_MS", 60 * 1000),
     },
   };
 }
@@ -173,12 +188,26 @@ export function buildServer(
   }
   // createMcpFastifyApp does not forward Fastify constructor options (only
   // host/allowedHosts/allowedOrigins, used to decide whether to add DNS
-  // rebinding hooks) — confirmed by reading its source rather than assuming
-  // it. At host "0.0.0.0" it adds no rebinding hook either way, only a log
-  // warning, so building Fastify directly here for host "0.0.0.0" carries no
-  // loss of the protection createMcpFastifyApp would have applied.
+  // rebinding hooks), so the logger, redaction and trustProxy settings this
+  // server needs cannot be passed through it. Nothing is lost by building
+  // Fastify directly at host "0.0.0.0": the wrapper's own documentation says
+  // so — "createMcpFastifyApp({ host: '0.0.0.0' }); // No automatic DNS
+  // rebinding protection" — with the hook applied only for localhost hosts.
+  // The package is therefore no longer a dependency of this project.
+  // Trust exactly the hops the ingress adds, never the whole chain. With
+  // `trustProxy: true` proxy-addr trusts every entry in X-Forwarded-For and
+  // request.ip becomes the LEFT-most value — client-supplied, so a caller
+  // rotating that header gets a fresh bucket from every IP limiter here,
+  // including the one guarding the connection PUT that dials arbitrary hosts.
+  // A hop count makes request.ip the address the trusted proxy actually saw.
+  const trustedProxyHops = envInt("SEERRSENSE_TRUSTED_PROXY_HOPS", 1);
   const fastify = Fastify({
-    trustProxy: true,
+    // proxy-addr's function form: trusted(address, hop) is asked about each
+    // hop from the socket outwards, and request.ip becomes the first address
+    // it refuses. Trusting `hops` of them means the ingress is trusted and
+    // whatever the caller put in front of it is not. Fastify's types do not
+    // accept proxy-addr's plain-number form, so this spells it out.
+    trustProxy: (_address: string, hop: number) => hop < trustedProxyHops,
     logger: {
       level: process.env.LOG_LEVEL ?? "info",
       redact: {
@@ -202,6 +231,48 @@ export function buildServer(
   // never given a rateLimit config, so they stay unlimited.
   fastify.register(rateLimit, { global: false, hook: "preHandler" });
   const limits = rateLimitSettings();
+
+  // The route-level limiters above run at preHandler, i.e. AFTER the bearer
+  // gate below, so a request that fails authentication short-circuits with 401
+  // and is never metered at all — an unbounded number of guesses per second at
+  // SEERRSENSE_AUTH_TOKEN, which is a fixed shared secret rather than a signed
+  // token. This counter runs at onRequest, before any of that, keyed on the IP
+  // because there is no subject yet.
+  //
+  // Hand-rolled rather than a second @fastify/rate-limit instance: calling
+  // fastify.rateLimit() and attaching it as a root hook makes the plugin stop
+  // applying the per-route `config.rateLimit` limiters, silently turning off
+  // every limit this PR adds. A fixed window over a Map has no such coupling,
+  // and the state it holds is the same per-process state the plugin's default
+  // store holds anyway.
+  const gateHits = new Map<string, { count: number; resetAt: number }>();
+  fastify.addHook("onRequest", async (request, reply) => {
+    if (isPublic(request.url) || isSessionRoute(request.url)) return;
+    if (limits.gate.max === 0) {
+      reply.status(429).send({ error: "too many requests" });
+      return reply;
+    }
+    const now = Date.now();
+    // Bounded: entries are dropped as they expire, and a sweep keeps a burst
+    // of distinct addresses from growing the map without limit.
+    if (gateHits.size > 10_000) {
+      for (const [key, entry] of gateHits) if (entry.resetAt <= now) gateHits.delete(key);
+    }
+    const existing = gateHits.get(request.ip);
+    const window = existing && existing.resetAt > now
+      ? existing
+      : { count: 0, resetAt: now + limits.gate.timeWindow };
+    window.count += 1;
+    gateHits.set(request.ip, window);
+    if (window.count > limits.gate.max) {
+      request.log.warn({ route: "pre-auth", key: "ip" }, "rate limit exceeded");
+      reply
+        .status(429)
+        .header("retry-after", Math.ceil((window.resetAt - now) / 1000))
+        .send({ error: "too many requests" });
+      return reply;
+    }
+  });
 
   const authStore: AuthStore | undefined = authSettings.oauth
     ? (deps.store ?? (authSettings.oauth.databaseUrl

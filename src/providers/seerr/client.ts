@@ -9,6 +9,10 @@ import {
   MediaType
 } from "../../core/media.js";
 
+/** Ceiling on an untrusted Seerr's response body. Overseerr's own payloads are
+ * far below this; the number exists so a hostile host cannot stream forever. */
+const MAX_UNTRUSTED_BODY_BYTES = 5 * 1024 * 1024;
+
 /** How long a client trusts its own guard check before re-running it. */
 const GUARD_MEMO_MS = 5_000;
 
@@ -54,7 +58,7 @@ function isCloudflareAccessChallenge(response: Response, location: string | null
 /** A `dns.lookup`-shaped callback that only ever answers with a guard-approved
  * address, re-checked here so a second DNS answer between check and connect
  * cannot reach a different host. */
-function pinnedLookup(addresses: string[]) {
+export function pinnedLookup(addresses: string[]) {
   return (
     _hostname: string,
     options: { all?: boolean } | ((err: Error | null, address?: unknown, family?: number) => void),
@@ -205,8 +209,22 @@ export class SeerrClient {
       clearTimeout(timeoutId);
       throw new SeerrUnreachableError("could not reach that Seerr");
     }
-    clearTimeout(timeoutId);
 
+    // The timer stays armed until the body has been read. Clearing it here —
+    // before response.json() — would let a host that trickles or never
+    // finishes its body park this handler, its socket and its undici
+    // connection for as long as it likes, and by construction of
+    // `untrusted: true` that host was chosen by the person, not by us.
+    try {
+      return await this.readUntrusted(response);
+    } finally {
+      clearTimeout(timeoutId);
+    }
+  }
+
+  /** Body handling for an untrusted response: no redirect followed, no
+   * upstream detail relayed, and a ceiling on how much will be read. */
+  private async readUntrusted(response: Response) {
     if (response.status >= 300 && response.status < 400) {
       const location = response.headers.get("location");
       if (isCloudflareAccessChallenge(response, location)) {
@@ -222,7 +240,31 @@ export class SeerrClient {
       throw new SeerrUnreachableError("could not reach that Seerr", response.status);
     }
 
-    return await response.json();
+    const declared = Number(response.headers.get("content-length"));
+    if (Number.isFinite(declared) && declared > MAX_UNTRUSTED_BODY_BYTES) {
+      throw new SeerrUnreachableError("could not reach that Seerr", response.status);
+    }
+    const text = await response.text();
+    if (text.length > MAX_UNTRUSTED_BODY_BYTES) {
+      throw new SeerrUnreachableError("could not reach that Seerr", response.status);
+    }
+    try {
+      return JSON.parse(text);
+    } catch {
+      throw new SeerrUnreachableError("could not reach that Seerr", response.status);
+    }
+  }
+
+  /**
+   * Releases the pinned dispatcher and its keep-alive sockets. Per-user
+   * clients are short-lived by design — TenantResolver rebuilds one about
+   * once a minute for a steadily-used account — so whoever discards a client
+   * must call this or the agents accumulate, each holding open connections.
+   */
+  async close(): Promise<void> {
+    const cached = this.guardCache;
+    this.guardCache = undefined;
+    if (cached) await cached.dispatcher.close().catch(() => {});
   }
 
   async status(): Promise<any> {

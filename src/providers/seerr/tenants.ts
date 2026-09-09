@@ -87,13 +87,19 @@ export class TenantResolver {
       tenant = await this.householdTenant(email, subject, true);
     }
 
+    const replaced = this.cache.get(subject);
     this.cache.set(subject, { tenant, expiresAt: Date.now() + this.ttlMs });
+    if (replaced && replaced.tenant !== tenant) void closeIfOwned(replaced.tenant);
     return tenant;
   }
 
   /** Called when a connection is written or removed, so the change is immediate. */
   forget(subject: string): void {
+    const evicted = this.cache.get(subject);
     this.cache.delete(subject);
+    // A per-user client owns an undici Agent with its own keep-alive pool;
+    // dropping the reference without closing it leaks the sockets.
+    void closeIfOwned(evicted?.tenant);
   }
 
   /**
@@ -130,4 +136,10 @@ export class TenantResolver {
 export function notConnectedMessage(publicUrl: string | undefined): string {
   const where = publicUrl ? `${publicUrl}/account` : "the account page";
   return `No Seerr is connected to this account yet. Open ${where} to attach your Overseerr or Jellyseerr.`;
+}
+
+/** Closes a tenant's own SeerrClient, never the shared household one. */
+async function closeIfOwned(tenant: Tenant | undefined): Promise<void> {
+  if (tenant?.source !== "own") return;
+  await tenant.client?.close().catch(() => {});
 }

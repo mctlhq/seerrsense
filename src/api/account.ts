@@ -132,10 +132,13 @@ export function registerAccountRoutes(
 
     // Prove the credentials before storing them: a typo in the key would
     // otherwise only surface later, inside an assistant, as an opaque failure.
+    // The candidate exists only to prove the credentials; its pinned
+    // dispatcher must not outlive that, or every PUT leaks an agent.
     let seerrUser: string | undefined;
     try {
       seerrUser = await candidate.describeSelf();
     } catch (error) {
+      void candidate.close();
       request.log.info({ err: error }, "rejected a Seerr connection that did not answer");
       if (error instanceof SeerrAccessChallengeError) {
         return reply.status(400).send({
@@ -153,6 +156,7 @@ export function registerAccountRoutes(
         error: "That Seerr did not accept the address and key. Check both and try again.",
       });
     }
+    void candidate.close();
 
     await store.putUserConnection({
       subject: session.subject,
