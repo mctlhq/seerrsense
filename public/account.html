@@ -218,7 +218,12 @@
   });
 
   signOut.addEventListener("click", async function () {
-    await fetch("/api/v1/account/session", { method: "DELETE", credentials: "same-origin" });
+    var response = await fetch("/api/v1/account/session", { method: "DELETE", credentials: "same-origin" });
+    // The route clears the cookie only after recording the revocation, so a
+    // 500 (the store being unreachable) leaves the session alive. Reloading
+    // on that would silently re-render the signed-in page, and the person who
+    // just clicked "Sign out" would have no way to tell it did not happen.
+    if (!response.ok) return show("Could not sign out. Try again.", "bad");
     location.reload();
   });
 
