@@ -280,4 +280,23 @@ describe.each(stores)("%s", (name, make) => {
     expect((await store.getUserConnection(mine))?.seerrUrl).toBe("https://mine.test");
     expect((await store.getUserConnection(yours))?.seerrUrl).toBe("https://yours.test");
   });
+
+  it("records a session revocation and reports it back", async () => {
+    await fresh();
+    const jti = id("jti");
+    expect(await store.isSessionRevoked(jti)).toBe(false);
+    await store.revokeSession(jti, Date.now() + 60_000);
+    expect(await store.isSessionRevoked(jti)).toBe(true);
+  });
+
+  it("purgeExpired sweeps a revocation past its expiry but leaves a live one", async () => {
+    await fresh();
+    const expired = id("jti");
+    const live = id("jti");
+    await store.revokeSession(expired, Date.now() - 1);
+    await store.revokeSession(live, Date.now() + 60_000);
+    await store.purgeExpired();
+    expect(await store.isSessionRevoked(expired)).toBe(false);
+    expect(await store.isSessionRevoked(live)).toBe(true);
+  });
 });

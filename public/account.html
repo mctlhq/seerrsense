@@ -50,6 +50,9 @@
   </div>
 
   <div id="signed-in" hidden>
+    <div class="row">
+      <button class="btn btn-secondary" type="button" id="sign-out">Sign out</button>
+    </div>
     <p class="status" id="status">Loading…</p>
 
     <form id="connection">
@@ -91,10 +94,28 @@
   var status = document.getElementById("status");
   var form = document.getElementById("connection");
   var disconnect = document.getElementById("disconnect");
+  var signOut = document.getElementById("sign-out");
 
   function show(message, kind) {
     status.textContent = message;
     status.className = "status" + (kind ? " is-" + kind : "");
+  }
+
+  // The one place that decides what the person is told. Three distinct,
+  // textually distinct states: connected to their own Seerr, the shared
+  // Seerr fallback, or nothing connected yet — the last one is the default
+  // whenever `fallback` is absent or unrecognised, so this never promises an
+  // instance the account may not be allowed to reach.
+  function renderStatus(body) {
+    var who = "Signed in as " + body.email + ". ";
+    if (body.connected) {
+      var attribution = body.seerrUser ? " as " + body.seerrUser : "";
+      return show(who + "Connected to " + body.seerrUrl + attribution + ".", "ok");
+    }
+    if (body.fallback === "household") {
+      return show(who + "Using the shared Seerr until you attach your own.");
+    }
+    return show(who + "No Seerr is connected yet — attach yours below to start.");
   }
 
   // PKCE, in the browser: this page is a public client like any other, and the
@@ -130,6 +151,10 @@
     }
   }
 
+  // The save and disconnect responses do not carry `email` — it does not
+  // change within a session, so it is kept here rather than requested again.
+  var signedInEmail = "";
+
   async function load() {
     var response = await fetch("/api/v1/account/connection", { credentials: "same-origin" });
     if (response.status === 401) return showSignedOut();
@@ -140,14 +165,14 @@
       return showSignedOut("Sign-in is not enabled on this server. It is using a shared token.");
     }
     var body = await response.json();
+    signedInEmail = body.email;
     signedOut.hidden = true;
     signedIn.hidden = false;
+    renderStatus(body);
     if (body.connected) {
-      show("Signed in as " + body.email + ". Connected to " + body.seerrUrl + ".", "ok");
       document.getElementById("seerr-url").value = body.seerrUrl;
       disconnect.hidden = false;
     } else {
-      show("Signed in as " + body.email + ". Using the shared Seerr until you attach your own.");
       disconnect.hidden = true;
     }
   }
@@ -173,15 +198,21 @@
       return;
     }
     form.apiKey.value = "";
-    show("Connected to " + body.seerrUrl + (body.seerrUser ? " as " + body.seerrUser : "") + ".", "ok");
     disconnect.hidden = false;
+    renderStatus({ email: signedInEmail, connected: true, seerrUrl: body.seerrUrl, seerrUser: body.seerrUser });
   });
 
   disconnect.addEventListener("click", async function () {
-    await fetch("/api/v1/account/connection", { method: "DELETE", credentials: "same-origin" });
+    var response = await fetch("/api/v1/account/connection", { method: "DELETE", credentials: "same-origin" });
+    var body = await response.json();
     form.reset();
     disconnect.hidden = true;
-    show("Disconnected. Using the shared Seerr again.");
+    renderStatus({ email: signedInEmail, connected: false, fallback: body.fallback });
+  });
+
+  signOut.addEventListener("click", async function () {
+    await fetch("/api/v1/account/session", { method: "DELETE", credentials: "same-origin" });
+    location.reload();
   });
 
   load();

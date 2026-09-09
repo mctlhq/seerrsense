@@ -103,6 +103,19 @@ export class TenantResolver {
   }
 
   /**
+   * What a signed-in caller with no connection of their own reaches. This is
+   * the resolver's own decision, exposed so the account page can state the
+   * truth instead of keeping a second copy of the rule that drifts from this
+   * one. Synchronous, makes no network call, and never touches the
+   * per-subject cache.
+   */
+  householdFallback(email: string): "household" | "none" {
+    if (!this.household) return "none";
+    if (!this.householdEmails.has(email.toLowerCase())) return "none";
+    return "household";
+  }
+
+  /**
    * `ownerOnly` is true on the signed-in path, where a caller with no
    * user_connections row of their own must be a named household owner to
    * reach the shared instance. It is false for the legacy shared token and
@@ -113,22 +126,26 @@ export class TenantResolver {
     subject: string | undefined,
     ownerOnly: boolean,
   ): Promise<Tenant> {
-    if (!this.household) return { email, source: "none", subject };
-    if (ownerOnly && !this.householdEmails.has(email.toLowerCase())) {
+    if (ownerOnly ? this.householdFallback(email) === "none" : !this.household) {
       return { email, source: "none", subject };
     }
+    // Reaching here means a client exists: householdFallback already checked
+    // `!this.household` on the ownerOnly path, and the branch above returned
+    // on it directly otherwise. TypeScript cannot see that invariant through
+    // the method call, hence the assertions below.
+    const household = this.household!;
     // On the shared instance the API key belongs to the owner, so a request
     // would otherwise be filed under their name. Overseerr accepts a userId,
     // and the person's own address is what identifies them there.
     let attributedUserId: number | undefined;
     if (email) {
       try {
-        attributedUserId = await this.household.findUserIdByEmail(email);
+        attributedUserId = await household.findUserIdByEmail(email);
       } catch {
         // Attribution is a nicety; failing to look it up must not stop a search.
       }
     }
-    return { client: this.household, email, attributedUserId, source: "household", subject };
+    return { client: household, email, attributedUserId, source: "household", subject };
   }
 }
 

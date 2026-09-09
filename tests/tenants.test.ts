@@ -138,6 +138,40 @@ describe("resolving which Seerr a caller reaches", () => {
     expect(tenant.client).toBe(shared);
   });
 
+  it("agrees with itself: householdFallback and resolve().source never diverge", async () => {
+    const shared = household({ findUserIdByEmail: vi.fn().mockResolvedValue(1) } as any);
+    const resolver = new TenantResolver(
+      new MemoryAuthStore(),
+      KEY,
+      shared,
+      new Set(["listed@example.com"]),
+    );
+
+    const listed = await resolver.resolve(authFor("google:listed", "listed@example.com"));
+    expect(resolver.householdFallback("listed@example.com")).toBe("household");
+    expect(listed.source).toBe("household");
+
+    const unlisted = await resolver.resolve(authFor("google:unlisted", "unlisted@example.com"));
+    expect(resolver.householdFallback("unlisted@example.com")).toBe("none");
+    expect(unlisted.source).toBe("none");
+  });
+
+  it("householdFallback makes no network call and does not touch the cache", async () => {
+    const store = new MemoryAuthStore();
+    const spy = vi.spyOn(store, "getUserConnection");
+    const shared = household({ findUserIdByEmail: vi.fn().mockResolvedValue(1) } as any);
+    const resolver = new TenantResolver(store, KEY, shared, new Set(["listed@example.com"]));
+
+    expect(resolver.householdFallback("listed@example.com")).toBe("household");
+    expect(shared.findUserIdByEmail).not.toHaveBeenCalled();
+    expect(spy).not.toHaveBeenCalled();
+
+    // A subsequent resolve() still costs a fresh lookup — the cache was not
+    // pre-populated by the fallback check.
+    await resolver.resolve(authFor("google:listed", "listed@example.com"));
+    expect(spy).toHaveBeenCalledTimes(1);
+  });
+
   it("reports nothing to talk to when there is no household instance", async () => {
     const resolver = new TenantResolver(new MemoryAuthStore(), KEY, undefined);
     const tenant = await resolver.resolve(authFor("google:5", "five@example.com"));

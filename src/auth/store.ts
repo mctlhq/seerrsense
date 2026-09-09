@@ -89,6 +89,14 @@ export interface AuthStore {
   putUserConnection(connection: UserConnection): Promise<void>;
   deleteUserConnection(subject: string): Promise<void>;
   /**
+   * Records a browser session as ended, keyed by its `jti`. `expiresAt` is the
+   * session's own expiry (epoch milliseconds) — the record need not outlive
+   * the cookie it revokes, so `purgeExpired` sweeps it on the same schedule as
+   * everything else here.
+   */
+  revokeSession(id: string, expiresAt: number): Promise<void>;
+  isSessionRevoked(id: string): Promise<boolean>;
+  /**
    * Increments and returns the number of model-backed resolve calls a
    * subject (or the reserved `"__global__"` subject) has made on a given UTC
    * day (`YYYY-MM-DD`). Atomic, so two replicas cannot both see "one below
@@ -114,6 +122,10 @@ export class MemoryAuthStore implements AuthStore {
   /** Keyed on `${subject} ${day}`; the day never contains a space, so
    * lastIndexOf(" ") splits it back unambiguously. */
   private resolveUsage = new Map<string, number>();
+  /** jti -> expiresAt (epoch ms). Lost on restart, exactly like refresh
+   * tokens: a self-hoster on this store re-verifies stateless sessions rather
+   * than keeping a revocation list across a restart. */
+  private revokedSessions = new Map<string, number>();
 
   async init(): Promise<void> {}
 
@@ -166,6 +178,9 @@ export class MemoryAuthStore implements AuthStore {
     for (const [key, value] of this.pending) if (value.expiresAt < now) this.pending.delete(key);
     for (const [key, value] of this.codes) if (value.expiresAt < now) this.codes.delete(key);
     for (const [key, value] of this.refresh) if (value.expiresAt < now) this.refresh.delete(key);
+    for (const [key, expiresAt] of this.revokedSessions) {
+      if (expiresAt < now) this.revokedSessions.delete(key);
+    }
     // Connections are deliberately untouched: they do not expire, and losing one
     // means a person's Seerr silently detaches.
   }
@@ -180,6 +195,14 @@ export class MemoryAuthStore implements AuthStore {
 
   async deleteUserConnection(subject: string): Promise<void> {
     this.connections.delete(subject);
+  }
+
+  async revokeSession(id: string, expiresAt: number): Promise<void> {
+    this.revokedSessions.set(id, expiresAt);
+  }
+
+  async isSessionRevoked(id: string): Promise<boolean> {
+    return this.revokedSessions.has(id);
   }
 
   async countResolve(subject: string, day: string): Promise<number> {
@@ -202,6 +225,7 @@ export class MemoryAuthStore implements AuthStore {
     this.refresh.clear();
     this.connections.clear();
     this.resolveUsage.clear();
+    this.revokedSessions.clear();
   }
 }
 

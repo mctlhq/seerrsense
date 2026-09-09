@@ -13,16 +13,23 @@ const householdSeerr = vi.hoisted(() => ({
 vi.mock("../src/providers/seerr/client.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../src/providers/seerr/client.js")>()),
   seerrClient: householdSeerr,
-  createDefaultSeerrClient: () => householdSeerr,
+  // Mirrors createDefaultSeerrClient's own rule (undefined without
+  // SEERR_API_KEY), so a test can turn the household instance off the same
+  // way an operator would, without a real SeerrClient dialling anything.
+  createDefaultSeerrClient: () => (process.env.SEERR_API_KEY ? householdSeerr : undefined),
 }));
 
 const ISSUER = "https://seerrsense.test";
 const ALLOWED_EMAIL = "owner@example.com";
+// Allowed to sign in, but never listed in SEERRSENSE_HOUSEHOLD_EMAILS.
+const STRANGER_EMAIL = "stranger@example.com";
 const ENCRYPTION_KEY = randomBytes(32).toString("hex");
 
 let signPrivateKey: CryptoKey;
 let googleJwks: { keys: unknown[] };
 let lastGoogleNonce: string | undefined;
+/** The address Google reports back for the next sign-in. */
+let currentEmail = ALLOWED_EMAIL;
 /** What the user's own Seerr answers when its credentials are checked. */
 let seerrAnswers: { ok: boolean; body?: unknown } = { ok: true, body: { displayName: "Owner" } };
 let seerrCalls: Array<{ url: string; headers: Record<string, string> }> = [];
@@ -59,7 +66,7 @@ async function stubFetch(input: any, init?: any): Promise<Response> {
   }
   if (url.startsWith("https://www.googleapis.com/oauth2/v3/certs")) return json(googleJwks);
   if (url.startsWith("https://oauth2.googleapis.com/token")) {
-    const idToken = await new SignJWT({ email: ALLOWED_EMAIL, email_verified: true, nonce: lastGoogleNonce })
+    const idToken = await new SignJWT({ email: currentEmail, email_verified: true, nonce: lastGoogleNonce })
       .setProtectedHeader({ alg: "RS256", kid: "test-key" })
       .setIssuer("https://accounts.google.com")
       .setAudience("google-client-id")
@@ -98,7 +105,7 @@ beforeAll(async () => {
   process.env.GOOGLE_OAUTH_CLIENT_ID = "google-client-id";
   process.env.GOOGLE_OAUTH_CLIENT_SECRET = "google-client-secret";
   process.env.SEERRSENSE_OAUTH_JWT_SIGNING_KEY = "x".repeat(48);
-  process.env.SEERRSENSE_ALLOWED_EMAILS = ALLOWED_EMAIL;
+  process.env.SEERRSENSE_ALLOWED_EMAILS = `${ALLOWED_EMAIL},${STRANGER_EMAIL}`;
   process.env.SEERRSENSE_ENCRYPTION_KEY = ENCRYPTION_KEY;
   // Fails closed otherwise: the SSRF guard's household-ownership restriction
   // (issue #44) would take the shared instance away from every test here that
@@ -122,7 +129,8 @@ async function makeApp() {
 }
 
 /** Signs the browser in exactly as the page does, and returns its cookie. */
-async function signIn(app: any): Promise<string> {
+async function signIn(app: any, email: string = ALLOWED_EMAIL): Promise<string> {
+  currentEmail = email;
   const verifier = makeVerifier();
   const authorize = await app.inject({
     method: "GET",
@@ -167,7 +175,8 @@ async function signIn(app: any): Promise<string> {
 }
 
 /** A real MCP access token for the same person. */
-async function mcpTokenFor(app: any): Promise<string> {
+async function mcpTokenFor(app: any, email: string = ALLOWED_EMAIL): Promise<string> {
+  currentEmail = email;
   const verifier = makeVerifier();
   const authorize = await app.inject({
     method: "GET", url: "/oauth/authorize",
@@ -367,7 +376,7 @@ describe("attaching a Seerr", () => {
     // fields rather than searching for the secret catches a sealed value too,
     // which a substring check would happily let through.
     expect(Object.keys(body).sort()).toEqual(
-      ["cfAccessConfigured", "connected", "email", "seerrUrl", "updatedAt"],
+      ["cfAccessConfigured", "connected", "email", "fallback", "seerrUrl", "updatedAt"],
     );
     await app.close();
   });
@@ -565,6 +574,250 @@ describe("attaching a Seerr", () => {
     });
     expect(householdSeerr.search).toHaveBeenCalled();
     seerrAnswers = { ok: true, body: { displayName: "Owner" } };
+    await app.close();
+  });
+});
+
+describe("what the account page reports", () => {
+  it("reports the household fallback for a listed address and none for a stranger", async () => {
+    const app = await makeApp();
+
+    const owner = await signIn(app, ALLOWED_EMAIL);
+    const ownerBody = JSON.parse(
+      (await app.inject({ method: "GET", url: "/api/v1/account/connection", headers: { cookie: owner } })).payload,
+    );
+    expect(ownerBody.fallback).toBe("household");
+
+    // Allowed to sign in, but SEERRSENSE_HOUSEHOLD_EMAILS never named this
+    // address: the page must not promise the shared instance it cannot reach.
+    const stranger = await signIn(app, STRANGER_EMAIL);
+    const strangerBody = JSON.parse(
+      (await app.inject({ method: "GET", url: "/api/v1/account/connection", headers: { cookie: stranger } })).payload,
+    );
+    expect(strangerBody.fallback).toBe("none");
+
+    await app.close();
+  });
+
+  it("reports none for every caller when no household client is configured", async () => {
+    const previous = process.env.SEERR_API_KEY;
+    delete process.env.SEERR_API_KEY;
+    const app = await makeApp();
+    const cookie = await signIn(app, ALLOWED_EMAIL);
+
+    const body = JSON.parse(
+      (await app.inject({ method: "GET", url: "/api/v1/account/connection", headers: { cookie } })).payload,
+    );
+    // A second copy of SEERRSENSE_HOUSEHOLD_EMAILS read in account.ts would
+    // have told this listed address it has a shared instance that
+    // createDefaultSeerrClient() never built.
+    expect(body.fallback).toBe("none");
+
+    await app.close();
+    process.env.SEERR_API_KEY = previous;
+  });
+
+  it("carries all three distinct status sentences and still branches on fallback", async () => {
+    const app = await makeApp();
+    const page = await app.inject({ method: "GET", url: "/account" });
+    expect(page.statusCode).toBe(200);
+    expect(page.payload).toContain("Connected to ");
+    expect(page.payload).toContain("Using the shared Seerr until you attach your own.");
+    expect(page.payload).toContain("No Seerr is connected yet");
+    expect(page.payload).toContain("fallback");
+    expect(page.payload).not.toMatch(/[\w.+-]+@[\w-]+\.[\w.-]+/);
+    await app.close();
+  });
+
+  it("returns fallback from DELETE alongside connected: false, matching a follow-up GET", async () => {
+    const app = await makeApp();
+    const cookie = await signIn(app, ALLOWED_EMAIL);
+    await app.inject({
+      method: "PUT", url: "/api/v1/account/connection", headers: { cookie },
+      payload: { seerrUrl: "https://mine.example", apiKey: "my-key" },
+    });
+
+    const deleted = await app.inject({ method: "DELETE", url: "/api/v1/account/connection", headers: { cookie } });
+    const deletedBody = JSON.parse(deleted.payload);
+    expect(deletedBody).toMatchObject({ connected: false, fallback: "household" });
+
+    const after = JSON.parse(
+      (await app.inject({ method: "GET", url: "/api/v1/account/connection", headers: { cookie } })).payload,
+    );
+    expect(after.fallback).toBe(deletedBody.fallback);
+    await app.close();
+  });
+});
+
+describe("signing out", () => {
+  it("clears the session cookie with the same attributes it was set with", async () => {
+    const app = await makeApp();
+    const cookie = await signIn(app, ALLOWED_EMAIL);
+
+    const response = await app.inject({ method: "DELETE", url: "/api/v1/account/session", headers: { cookie } });
+    expect(response.statusCode).toBe(200);
+    const setCookie = response.headers["set-cookie"] as string | string[];
+    const raw = Array.isArray(setCookie) ? setCookie[0] : setCookie;
+    expect(raw).toContain("Path=/");
+    expect(raw).toContain("HttpOnly");
+    expect(raw).toContain("SameSite=Lax");
+    // Cleared, not merely re-set: the browser is told to drop it.
+    expect(raw).toMatch(/Expires=|Max-Age=0/);
+
+    await app.close();
+  });
+
+  it("ends the session: the old cookie is refused afterwards", async () => {
+    const app = await makeApp();
+    const cookie = await signIn(app, ALLOWED_EMAIL);
+
+    await app.inject({ method: "DELETE", url: "/api/v1/account/session", headers: { cookie } });
+    const replay = await app.inject({ method: "GET", url: "/api/v1/account/connection", headers: { cookie } });
+    expect(replay.statusCode).toBe(401);
+
+    await app.close();
+  });
+
+  it("does not touch MCP grants: a refresh token still redeems after sign-out", async () => {
+    const app = await makeApp();
+    const cookie = await signIn(app, ALLOWED_EMAIL);
+
+    const verifier = makeVerifier();
+    const authorize = await app.inject({
+      method: "GET", url: "/oauth/authorize",
+      query: {
+        client_id: `${ISSUER}/account`, redirect_uri: `${ISSUER}/account/callback`,
+        response_type: "code", code_challenge: challengeFor(verifier),
+        code_challenge_method: "S256", scope: "seerr:read offline_access",
+      },
+    });
+    const googleUrl = new URL(authorize.headers.location as string);
+    lastGoogleNonce = googleUrl.searchParams.get("nonce") ?? undefined;
+    const consent = await app.inject({
+      method: "GET", url: "/oauth/google/callback",
+      query: { code: "google-code", state: googleUrl.searchParams.get("state")! },
+    });
+    const handle = consent.payload.match(/name="code" value="([^"]+)"/)![1];
+    const granted = await app.inject({
+      method: "POST", url: "/oauth/consent",
+      headers: { "content-type": "application/x-www-form-urlencoded" },
+      payload: new URLSearchParams({ code: handle, decision: "allow" }).toString(),
+    });
+    const code = new URL(granted.headers.location as string).searchParams.get("code")!;
+    const token = await app.inject({
+      method: "POST", url: "/oauth/token",
+      payload: {
+        grant_type: "authorization_code", code, redirect_uri: `${ISSUER}/account/callback`,
+        client_id: `${ISSUER}/account`, code_verifier: verifier,
+      },
+    });
+    const refreshToken = JSON.parse(token.payload).refresh_token;
+    expect(refreshToken).toBeTruthy();
+
+    await app.inject({ method: "DELETE", url: "/api/v1/account/session", headers: { cookie } });
+
+    const refreshed = await app.inject({
+      method: "POST", url: "/oauth/token",
+      payload: { grant_type: "refresh_token", refresh_token: refreshToken, client_id: `${ISSUER}/account` },
+    });
+    expect(refreshed.statusCode, refreshed.payload).toBe(200);
+    expect(JSON.parse(refreshed.payload).access_token).toBeTruthy();
+
+    await app.close();
+  });
+
+  it("leaves user_connections alone: signing in again after sign-out still reports the connection", async () => {
+    const app = await makeApp();
+    const cookie = await signIn(app, ALLOWED_EMAIL);
+    await app.inject({
+      method: "PUT", url: "/api/v1/account/connection", headers: { cookie },
+      payload: { seerrUrl: "https://mine.example", apiKey: "my-key" },
+    });
+
+    await app.inject({ method: "DELETE", url: "/api/v1/account/session", headers: { cookie } });
+
+    const secondCookie = await signIn(app, ALLOWED_EMAIL);
+    const body = JSON.parse(
+      (await app.inject({ method: "GET", url: "/api/v1/account/connection", headers: { cookie: secondCookie } }))
+        .payload,
+    );
+    expect(body).toMatchObject({ connected: true, seerrUrl: "https://mine.example" });
+
+    await app.close();
+  });
+
+  it("is idempotent and self-authenticating", async () => {
+    const app = await makeApp();
+
+    // No cookie at all.
+    const noCookie = await app.inject({ method: "DELETE", url: "/api/v1/account/session" });
+    expect(noCookie.statusCode).toBe(200);
+
+    // A cookie that does not decode as a session.
+    const badCookie = await app.inject({
+      method: "DELETE", url: "/api/v1/account/session", headers: { cookie: "seerrsense_session=garbage" },
+    });
+    expect(badCookie.statusCode).toBe(200);
+
+    // Twice in a row with a real cookie.
+    const cookie = await signIn(app, ALLOWED_EMAIL);
+    const first = await app.inject({ method: "DELETE", url: "/api/v1/account/session", headers: { cookie } });
+    expect(first.statusCode).toBe(200);
+    const second = await app.inject({ method: "DELETE", url: "/api/v1/account/session", headers: { cookie } });
+    expect(second.statusCode).toBe(200);
+
+    // An MCP access token, in the header or pasted into the cookie, acts on
+    // no session — the audience mismatch that already refuses it elsewhere.
+    const accessToken = await mcpTokenFor(app, ALLOWED_EMAIL);
+    const viaHeader = await app.inject({
+      method: "DELETE", url: "/api/v1/account/session", headers: { authorization: `Bearer ${accessToken}` },
+    });
+    expect(viaHeader.statusCode).toBe(200);
+    const viaCookie = await app.inject({
+      method: "DELETE", url: "/api/v1/account/session", headers: { cookie: `seerrsense_session=${accessToken}` },
+    });
+    expect(viaCookie.statusCode).toBe(200);
+
+    await app.close();
+  });
+
+  it("is not reachable as a GET", async () => {
+    const app = await makeApp();
+    const cookie = await signIn(app, ALLOWED_EMAIL);
+    const response = await app.inject({ method: "GET", url: "/api/v1/account/session", headers: { cookie } });
+    expect(response.headers["set-cookie"]).toBeUndefined();
+    // Fastify answers 404 for an unregistered method on a known prefix; either
+    // way, the session must still verify afterwards.
+    expect(response.statusCode).not.toBe(200);
+    const still = await app.inject({ method: "GET", url: "/api/v1/account/connection", headers: { cookie } });
+    expect(still.statusCode).toBe(200);
+    await app.close();
+  });
+
+  it("still accepts a session cookie issued before sessions carried a jti", async () => {
+    const app = await makeApp();
+    // Hand-built exactly as issueSession built cookies before this change:
+    // same claims, same signing key, no jti.
+    const legacy = await new SignJWT({ email: ALLOWED_EMAIL })
+      .setProtectedHeader({ alg: "HS256", typ: "JWT" })
+      .setIssuer(ISSUER)
+      .setAudience(`${ISSUER}/account`)
+      .setSubject("google:pre-jti")
+      .setIssuedAt()
+      .setExpirationTime(Math.floor(Date.now() / 1000) + 3600)
+      .sign(new TextEncoder().encode("x".repeat(48)));
+
+    const response = await app.inject({
+      method: "GET", url: "/api/v1/account/connection", headers: { cookie: `seerrsense_session=${legacy}` },
+    });
+    expect(response.statusCode).toBe(200);
+
+    // And sign-out still clears it, even with nothing to revoke server-side.
+    const signOut = await app.inject({
+      method: "DELETE", url: "/api/v1/account/session", headers: { cookie: `seerrsense_session=${legacy}` },
+    });
+    expect(signOut.statusCode).toBe(200);
+
     await app.close();
   });
 });
