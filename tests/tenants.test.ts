@@ -62,10 +62,10 @@ describe("resolving which Seerr a caller reaches", () => {
     expect((second.client as any).baseUrl).toBe("https://two.example");
   });
 
-  it("falls back to the household instance and attributes the request", async () => {
+  it("falls back to the household instance and attributes the request, for a listed owner", async () => {
     const store = new MemoryAuthStore();
     const shared = household({ findUserIdByEmail: vi.fn().mockResolvedValue(42) } as any);
-    const resolver = new TenantResolver(store, KEY, shared);
+    const resolver = new TenantResolver(store, KEY, shared, new Set(["three@example.com"]));
 
     const tenant = await resolver.resolve(authFor("google:3", "three@example.com"));
     expect(tenant.source).toBe("household");
@@ -74,15 +74,44 @@ describe("resolving which Seerr a caller reaches", () => {
     expect(tenant.attributedUserId).toBe(42);
   });
 
-  it("still resolves when the Seerr user lookup fails", async () => {
+  it("still resolves when the Seerr user lookup fails, for a listed owner", async () => {
     const shared = household({
       findUserIdByEmail: vi.fn().mockRejectedValue(new Error("boom")),
     } as any);
-    const resolver = new TenantResolver(new MemoryAuthStore(), KEY, shared);
+    const resolver = new TenantResolver(
+      new MemoryAuthStore(),
+      KEY,
+      shared,
+      new Set(["four@example.com"]),
+    );
 
     const tenant = await resolver.resolve(authFor("google:4", "four@example.com"));
     expect(tenant.client).toBe(shared);
     expect(tenant.attributedUserId).toBeUndefined();
+  });
+
+  it("resolves a signed-in caller with no connection and no listed household address to none", async () => {
+    const shared = household({ findUserIdByEmail: vi.fn().mockResolvedValue(99) } as any);
+    const resolver = new TenantResolver(new MemoryAuthStore(), KEY, shared, new Set());
+
+    const tenant = await resolver.resolve(authFor("google:9", "nine@example.com"));
+    expect(tenant.source).toBe("none");
+    expect(tenant.client).toBeUndefined();
+  });
+
+  it("offers the household instance to a signed-in caller whose address is listed", async () => {
+    const shared = household({ findUserIdByEmail: vi.fn().mockResolvedValue(99) } as any);
+    const resolver = new TenantResolver(
+      new MemoryAuthStore(),
+      KEY,
+      shared,
+      new Set(["ten@example.com"]),
+    );
+
+    const tenant = await resolver.resolve(authFor("google:10", "ten@example.com"));
+    expect(tenant.source).toBe("household");
+    expect(tenant.client).toBe(shared);
+    expect(tenant.attributedUserId).toBe(99);
   });
 
   it("gives the legacy shared token and stdio the household instance", async () => {
@@ -139,7 +168,7 @@ describe("resolving which Seerr a caller reaches", () => {
       seerrApiKeySealed: seal("key-seven", KEY), updatedAt: Date.now(),
     });
     const shared = household();
-    const resolver = new TenantResolver(store, KEY, shared);
+    const resolver = new TenantResolver(store, KEY, shared, new Set(["eight@example.com"]));
 
     const seven = await resolver.resolve(authFor("google:7", "seven@example.com"));
     const eight = await resolver.resolve(authFor("google:8", "eight@example.com"));

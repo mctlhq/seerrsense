@@ -1,11 +1,87 @@
+import { Agent } from "undici";
 import { config } from "../../core/config.js";
-import { 
-  MediaCandidate, 
-  MediaStatus, 
-  SeerrSearchResponseSchema, 
-  SeerrResultItemSchema, 
-  MediaType 
+import { assertPublicSeerrUrl, isBlockedAddress } from "./guard.js";
+import {
+  MediaCandidate,
+  MediaStatus,
+  SeerrSearchResponseSchema,
+  SeerrResultItemSchema,
+  MediaType
 } from "../../core/media.js";
+
+/** Ceiling on an untrusted Seerr's response body. Overseerr's own payloads are
+ * far below this; the number exists so a hostile host cannot stream forever. */
+const MAX_UNTRUSTED_BODY_BYTES = 5 * 1024 * 1024;
+
+/** How long a client trusts its own guard check before re-running it. */
+const GUARD_MEMO_MS = 5_000;
+
+/**
+ * Raised for any failure dialling an untrusted (per-user) Seerr: transport
+ * failure, timeout, a refused 3xx, or a non-2xx response. Carries the
+ * upstream status only internally, for logging — never in the message a
+ * caller can see, since every MCP tool relays `error.message` verbatim.
+ */
+export class SeerrUnreachableError extends Error {
+  constructor(
+    message = "could not reach that Seerr",
+    public readonly upstreamStatus?: number,
+  ) {
+    super(message);
+    this.name = "SeerrUnreachableError";
+  }
+}
+
+/** Raised when a dial to an untrusted Seerr is answered by Cloudflare Access. */
+export class SeerrAccessChallengeError extends Error {
+  constructor(message = "that address is behind Cloudflare Access") {
+    super(message);
+    this.name = "SeerrAccessChallengeError";
+  }
+}
+
+function isCloudflareAccessChallenge(response: Response, location: string | null): boolean {
+  if (location) {
+    try {
+      if (new URL(location, response.url || undefined).hostname.endsWith(".cloudflareaccess.com")) return true;
+    } catch {
+      // Not a parseable absolute-or-relative URL; fall through to the header check.
+    }
+  }
+  if (response.headers.get("cf-mitigated")?.toLowerCase() === "challenge") return true;
+  for (const key of response.headers.keys()) {
+    if (key.toLowerCase().startsWith("cf-access-")) return true;
+  }
+  return false;
+}
+
+/** A `dns.lookup`-shaped callback that only ever answers with a guard-approved
+ * address, re-checked here so a second DNS answer between check and connect
+ * cannot reach a different host. */
+export function pinnedLookup(addresses: string[]) {
+  return (
+    _hostname: string,
+    options: { all?: boolean } | ((err: Error | null, address?: unknown, family?: number) => void),
+    callback?: (err: Error | null, address?: unknown, family?: number) => void,
+  ) => {
+    const cb = typeof options === "function" ? options : callback!;
+    const wantsAll = typeof options === "object" && options?.all === true;
+    const safe = addresses.filter((address) => !isBlockedAddress(address));
+    if (safe.length === 0) {
+      cb(new Error("no safe address available for this host"));
+      return;
+    }
+    if (wantsAll) {
+      cb(
+        null,
+        safe.map((address) => ({ address, family: address.includes(":") ? 6 : 4 })),
+      );
+      return;
+    }
+    const address = safe[0];
+    cb(null, address, address.includes(":") ? 6 : 4);
+  };
+}
 
 /**
  * Credentials for one Seerr. Cloudflare Access is per-instance rather than
@@ -17,6 +93,15 @@ export interface SeerrCredentials {
   locale?: string;
   cfAccessClientId?: string;
   cfAccessClientSecret?: string;
+  /**
+   * Set for any client built from a user-supplied address: the `PUT`
+   * candidate and every per-user connection. The operator-configured
+   * household client never sets this, and is exempt from the address guard
+   * and from DNS pinning.
+   */
+  untrusted?: boolean;
+  /** Injectable for tests; defaults to a real DNS lookup inside the guard. */
+  lookup?: (host: string) => Promise<string[]>;
 }
 
 export class SeerrClient {
@@ -25,6 +110,9 @@ export class SeerrClient {
   private locale: string;
   private cfAccessClientId?: string;
   private cfAccessClientSecret?: string;
+  private untrusted: boolean;
+  private lookup?: (host: string) => Promise<string[]>;
+  private guardCache?: { expiresAt: number; addresses: string[]; dispatcher: Agent };
 
   constructor(credentials: SeerrCredentials);
   constructor(baseUrl: string, apiKey: string, locale?: string);
@@ -36,26 +124,53 @@ export class SeerrClient {
     this.locale = credentials.locale ?? "en-US";
     this.cfAccessClientId = credentials.cfAccessClientId;
     this.cfAccessClientSecret = credentials.cfAccessClientSecret;
+    this.untrusted = credentials.untrusted ?? false;
+    this.lookup = credentials.lookup;
+  }
+
+  private async guardedDispatcher(): Promise<Agent> {
+    const cached = this.guardCache;
+    if (cached && cached.expiresAt > Date.now()) return cached.dispatcher;
+
+    // Throws BlockedAddressError, which propagates as a generic, caller-safe
+    // message: this is the dial-time re-check that catches a hostname whose
+    // meaning changed since the connection was stored.
+    const { addresses } = await assertPublicSeerrUrl(this.baseUrl, { lookup: this.lookup });
+    const previous = cached?.dispatcher;
+    const dispatcher = new Agent({ connect: { lookup: pinnedLookup(addresses) as never } });
+    this.guardCache = { expiresAt: Date.now() + GUARD_MEMO_MS, addresses, dispatcher };
+    if (previous) previous.close().catch(() => {});
+    return dispatcher;
   }
 
   private async fetch(path: string, options: RequestInit = {}) {
+    if (this.untrusted) return this.fetchUntrusted(path, options);
+    return this.fetchTrusted(path, options);
+  }
+
+  private headersFor(extra?: HeadersInit): Record<string, string> {
+    return {
+      "X-Api-Key": this.apiKey,
+      "Accept-Language": this.locale,
+      "Content-Type": "application/json",
+      "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/115.0.0.0 Safari/537.36",
+      ...(this.cfAccessClientId ? { "CF-Access-Client-Id": this.cfAccessClientId } : {}),
+      ...(this.cfAccessClientSecret ? { "CF-Access-Client-Secret": this.cfAccessClientSecret } : {}),
+      ...((extra as Record<string, string>) || {}),
+    };
+  }
+
+  /** Today's behaviour, unchanged: the operator's own household instance. */
+  private async fetchTrusted(path: string, options: RequestInit) {
     const url = `${this.baseUrl}${path}`;
     const controller = new AbortController();
     const timeoutId = setTimeout(() => controller.abort(), 10000);
-    
+
     try {
       const response = await fetch(url, {
         ...options,
         signal: controller.signal,
-        headers: {
-          "X-Api-Key": this.apiKey,
-          "Accept-Language": this.locale,
-          "Content-Type": "application/json",
-          "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/115.0.0.0 Safari/537.36",
-          ...(this.cfAccessClientId ? { "CF-Access-Client-Id": this.cfAccessClientId } : {}),
-          ...(this.cfAccessClientSecret ? { "CF-Access-Client-Secret": this.cfAccessClientSecret } : {}),
-          ...(options.headers || {}),
-        },
+        headers: this.headersFor(options.headers),
       });
 
       if (!response.ok) {
@@ -66,6 +181,118 @@ export class SeerrClient {
     } finally {
       clearTimeout(timeoutId);
     }
+  }
+
+  /**
+   * A user-supplied address: guarded and DNS-pinned before every request, no
+   * redirect ever followed, and every failure reduced to a typed error that
+   * carries no upstream detail a caller could see.
+   */
+  private async fetchUntrusted(path: string, options: RequestInit) {
+    const dispatcher = await this.guardedDispatcher();
+    const url = `${this.baseUrl}${path}`;
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 10000);
+
+    let response: Response;
+    try {
+      response = await fetch(url, {
+        ...options,
+        signal: controller.signal,
+        redirect: "manual",
+        // @ts-expect-error -- `dispatcher` is undici's extension to fetch's
+        // options, not part of the standard RequestInit type.
+        dispatcher,
+        headers: this.headersFor(options.headers),
+      });
+    } catch (error) {
+      clearTimeout(timeoutId);
+      throw new SeerrUnreachableError("could not reach that Seerr");
+    }
+
+    // The timer stays armed until the body has been read. Clearing it here —
+    // before response.json() — would let a host that trickles or never
+    // finishes its body park this handler, its socket and its undici
+    // connection for as long as it likes, and by construction of
+    // `untrusted: true` that host was chosen by the person, not by us.
+    try {
+      return await this.readUntrusted(response);
+    } finally {
+      clearTimeout(timeoutId);
+    }
+  }
+
+  /** Body handling for an untrusted response: no redirect followed, no
+   * upstream detail relayed, and a ceiling on how much will be read. */
+  private async readUntrusted(response: Response) {
+    if (response.status >= 300 && response.status < 400) {
+      const location = response.headers.get("location");
+      if (isCloudflareAccessChallenge(response, location)) {
+        throw new SeerrAccessChallengeError();
+      }
+      // Never followed: a redirect could point at a second, unvetted host.
+      throw new SeerrUnreachableError("could not reach that Seerr", response.status);
+    }
+    if (isCloudflareAccessChallenge(response, null)) {
+      throw new SeerrAccessChallengeError();
+    }
+    if (!response.ok) {
+      throw new SeerrUnreachableError("could not reach that Seerr", response.status);
+    }
+
+    const declared = Number(response.headers.get("content-length"));
+    if (Number.isFinite(declared) && declared > MAX_UNTRUSTED_BODY_BYTES) {
+      throw new SeerrUnreachableError("could not reach that Seerr", response.status);
+    }
+    // Counted while reading, not after: content-length is absent under chunked
+    // encoding — which the untrusted host chooses — so a check after
+    // response.text() would cap what is returned, having already buffered
+    // whatever was sent. The reader is cancelled the moment the ceiling is
+    // crossed, so nothing beyond it is ever held.
+    const text = await this.readCapped(response);
+    try {
+      return JSON.parse(text);
+    } catch {
+      throw new SeerrUnreachableError("could not reach that Seerr", response.status);
+    }
+  }
+
+  private async readCapped(response: Response): Promise<string> {
+    const body = response.body;
+    // A stubbed fetch may hand back a response with no stream; there is
+    // nothing to meter in that case and text() is the whole of it.
+    if (!body) return await response.text();
+
+    const reader = body.getReader();
+    const decoder = new TextDecoder();
+    let read = 0;
+    let text = "";
+    try {
+      for (;;) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        read += value.byteLength;
+        if (read > MAX_UNTRUSTED_BODY_BYTES) {
+          throw new SeerrUnreachableError("could not reach that Seerr", response.status);
+        }
+        text += decoder.decode(value, { stream: true });
+      }
+    } finally {
+      await reader.cancel().catch(() => {});
+    }
+    return text + decoder.decode();
+  }
+
+  /**
+   * Releases the pinned dispatcher and its keep-alive sockets. Per-user
+   * clients are short-lived by design — TenantResolver rebuilds one about
+   * once a minute for a steadily-used account — so whoever discards a client
+   * must call this or the agents accumulate, each holding open connections.
+   */
+  async close(): Promise<void> {
+    const cached = this.guardCache;
+    this.guardCache = undefined;
+    if (cached) await cached.dispatcher.close().catch(() => {});
   }
 
   async status(): Promise<any> {

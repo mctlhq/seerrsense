@@ -4,7 +4,8 @@ import type { OAuthConfig } from "../auth/config.js";
 import { open, seal } from "../auth/crypto.js";
 import { readSession, SESSION_COOKIE, type Session } from "../auth/session.js";
 import type { AuthStore } from "../auth/store.js";
-import { SeerrClient } from "../providers/seerr/client.js";
+import { SeerrAccessChallengeError, SeerrClient, SeerrUnreachableError } from "../providers/seerr/client.js";
+import { assertPublicSeerrUrl, BlockedAddressError } from "../providers/seerr/guard.js";
 import type { TenantResolver } from "../providers/seerr/tenants.js";
 
 const ConnectionSchema = z.object({
@@ -29,7 +30,29 @@ export function registerAccountRoutes(
   config: OAuthConfig,
   store: AuthStore,
   tenants: TenantResolver,
+  deps: {
+    lookup?: (host: string) => Promise<string[]>;
+    rateLimit?: { max: number; timeWindow: number };
+  } = {},
 ) {
+  const putRateLimitConfig = deps.rateLimit
+    ? {
+        config: {
+          rateLimit: {
+            max: deps.rateLimit.max,
+            timeWindow: deps.rateLimit.timeWindow,
+            keyGenerator: (req: FastifyRequest) => req.ip,
+            onExceeded: (req: FastifyRequest) => {
+              req.log.warn(
+                { route: "/api/v1/account/connection", key: "ip" },
+                "rate limit exceeded",
+              );
+            },
+          },
+        },
+      }
+    : {};
+
   async function sessionOf(request: FastifyRequest): Promise<Session | undefined> {
     const cookies = (request as unknown as { cookies?: Record<string, string | undefined> }).cookies;
     const cookie = cookies?.[SESSION_COOKIE];
@@ -61,7 +84,7 @@ export function registerAccountRoutes(
     });
   });
 
-  fastify.put("/api/v1/account/connection", async (request, reply) => {
+  fastify.put("/api/v1/account/connection", putRateLimitConfig, async (request, reply) => {
     const session = await sessionOf(request);
     if (!session) return reply.status(401).send({ error: "not signed in" });
     const key = requireEncryption(reply);
@@ -82,24 +105,58 @@ export function registerAccountRoutes(
       return reply.status(400).send({ error: "an API key is required the first time" });
     }
 
+    // Validate the address before any network call is made at all: this is
+    // what makes it true that a blocked address is never dialled, not even
+    // once, to prove the credentials.
+    try {
+      await assertPublicSeerrUrl(body.data.seerrUrl, { lookup: deps.lookup });
+    } catch (error) {
+      if (error instanceof BlockedAddressError) {
+        request.log.warn(
+          { host: new URL(body.data.seerrUrl).hostname },
+          "rejected a Seerr connection address",
+        );
+        return reply.status(400).send({ error: "That address cannot be used. Check it and try again." });
+      }
+      throw error;
+    }
+
     const candidate = new SeerrClient({
       baseUrl: body.data.seerrUrl,
       apiKey,
       cfAccessClientId: body.data.cfAccessClientId,
       cfAccessClientSecret: body.data.cfAccessClientSecret,
+      untrusted: true,
+      lookup: deps.lookup,
     });
 
     // Prove the credentials before storing them: a typo in the key would
     // otherwise only surface later, inside an assistant, as an opaque failure.
+    // The candidate exists only to prove the credentials; its pinned
+    // dispatcher must not outlive that, or every PUT leaks an agent.
     let seerrUser: string | undefined;
     try {
       seerrUser = await candidate.describeSelf();
     } catch (error) {
+      void candidate.close();
       request.log.info({ err: error }, "rejected a Seerr connection that did not answer");
+      if (error instanceof SeerrAccessChallengeError) {
+        return reply.status(400).send({
+          error:
+            "That address is behind Cloudflare Access — fill in the Zero Trust fields " +
+            "(CF-Access-Client-Id and CF-Access-Client-Secret).",
+        });
+      }
+      if (error instanceof SeerrUnreachableError || error instanceof BlockedAddressError) {
+        return reply.status(400).send({
+          error: "Could not reach that Seerr. Check the address and key and try again.",
+        });
+      }
       return reply.status(400).send({
         error: "That Seerr did not accept the address and key. Check both and try again.",
       });
     }
+    void candidate.close();
 
     await store.putUserConnection({
       subject: session.subject,

@@ -88,6 +88,15 @@ export interface AuthStore {
   getUserConnection(subject: string): Promise<UserConnection | undefined>;
   putUserConnection(connection: UserConnection): Promise<void>;
   deleteUserConnection(subject: string): Promise<void>;
+  /**
+   * Increments and returns the number of model-backed resolve calls a
+   * subject (or the reserved `"__global__"` subject) has made on a given UTC
+   * day (`YYYY-MM-DD`). Atomic, so two replicas cannot both see "one below
+   * the cap".
+   */
+  countResolve(subject: string, day: string): Promise<number>;
+  /** Drops resolve-usage rows for days before `before` (`YYYY-MM-DD`). */
+  purgeResolveUsage(before: string): Promise<void>;
   close(): Promise<void>;
 }
 
@@ -102,6 +111,9 @@ export class MemoryAuthStore implements AuthStore {
   private codes = new Map<string, AuthCode>();
   private refresh = new Map<string, RefreshRecord>();
   private connections = new Map<string, UserConnection>();
+  /** Keyed on `${subject} ${day}`; the day never contains a space, so
+   * lastIndexOf(" ") splits it back unambiguously. */
+  private resolveUsage = new Map<string, number>();
 
   async init(): Promise<void> {}
 
@@ -170,11 +182,26 @@ export class MemoryAuthStore implements AuthStore {
     this.connections.delete(subject);
   }
 
+  async countResolve(subject: string, day: string): Promise<number> {
+    const key = `${subject} ${day}`;
+    const next = (this.resolveUsage.get(key) ?? 0) + 1;
+    this.resolveUsage.set(key, next);
+    return next;
+  }
+
+  async purgeResolveUsage(before: string): Promise<void> {
+    for (const key of this.resolveUsage.keys()) {
+      const day = key.slice(key.lastIndexOf(" ") + 1);
+      if (day < before) this.resolveUsage.delete(key);
+    }
+  }
+
   async close(): Promise<void> {
     this.pending.clear();
     this.codes.clear();
     this.refresh.clear();
     this.connections.clear();
+    this.resolveUsage.clear();
   }
 }
 

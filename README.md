@@ -157,12 +157,22 @@ Setting some but not all is refused at startup.
 | `GOOGLE_OAUTH_CLIENT_SECRET` | Google OAuth client secret |
 | `SEERRSENSE_OAUTH_JWT_SIGNING_KEY` | HS256 key for access tokens, at least 32 bytes |
 | `SEERRSENSE_ALLOWED_EMAILS` | Comma-separated Google addresses allowed to sign in. **Empty means nobody** |
+| `SEERRSENSE_OPEN_SIGNUP` | Set to exactly `true` to admit any Google account, ignoring `SEERRSENSE_ALLOWED_EMAILS`. Any other value — including `TRUE`, `1`, `yes` — means closed |
+| `SEERRSENSE_HOUSEHOLD_EMAILS` | Comma-separated addresses allowed to fall back to the shared `SEERR_URL` instance when they have no Seerr of their own attached. **Empty offers it to nobody signed in** — the legacy shared token and stdio mode are unaffected |
 | `SEERRSENSE_OAUTH_CLIENTS` | Optional pre-registered clients, `client_id=redirect_uri[,uri];...` |
 | `SEERRSENSE_LEGACY_TOKEN_ENABLED` | Set to `false` to stop accepting `SEERRSENSE_AUTH_TOKEN` |
 | `SEERRSENSE_ACCESS_TOKEN_TTL` | Access token lifetime in seconds, default 3600 |
 | `SEERRSENSE_REFRESH_TOKEN_TTL` | Refresh token lifetime in seconds, default 30 days |
-| `DATABASE_URL` | PostgreSQL for OAuth state and attached Seerr instances. Without it both live in memory and a restart detaches everyone |
+| `DATABASE_URL` | PostgreSQL for OAuth state, attached Seerr instances and the resolve-budget counters. Without it all three live in memory and a restart detaches everyone and resets the budget |
 | `SEERRSENSE_ENCRYPTION_KEY` | 32 bytes, hex or base64, sealing the Seerr API keys people attach. Without it nobody can attach one |
+| `SEERRSENSE_RATE_LIMIT_OAUTH_MAX` / `_WINDOW_MS` | Per-IP limit on `/oauth/*` and `/account/session`. Default 10 requests / 5 minutes |
+| `SEERRSENSE_RATE_LIMIT_CONNECTION_MAX` / `_WINDOW_MS` | Per-IP limit on `PUT /api/v1/account/connection`, tighter since each call dials an arbitrary host. Default 5 / 5 minutes |
+| `SEERRSENSE_RATE_LIMIT_SUBJECT_MAX` / `_WINDOW_MS` | Per-subject (falling back to per-IP) limit on `/mcp` and `/api/v1/*`. Default 120 / 1 minute |
+| `SEERRSENSE_RATE_LIMIT_GATE_MAX` / `_WINDOW_MS` | Per-IP ceiling applied *before* authentication, so failed bearer attempts are metered too — the route limiters run after the bearer gate and never see a 401. Default 300 / 1 minute |
+| `SEERRSENSE_TRUSTED_PROXY_HOPS` | How many proxy hops in front of the pod to trust when deriving the client address. **Default 0** — no forwarding header is believed, which is correct for a directly exposed container. Set it to the number of hops your ingress actually adds (1 for a single reverse proxy). Setting it higher than the real number lets a caller forge `X-Forwarded-For` and get a fresh bucket from every per-IP limit |
+| `SEERRSENSE_RESOLVE_DAILY_LIMIT` | Model-backed `resolve_media` calls one subject may make per UTC day. Default 50 |
+| `SEERRSENSE_RESOLVE_GLOBAL_DAILY_LIMIT` | Model-backed `resolve_media` calls across every subject per UTC day. Default 2000 |
+| `LOG_LEVEL` | Pino log level for the HTTP server (`fatal`/`error`/`warn`/`info`/`debug`/`trace`/`silent`), default `info`. Never applies to stdio mode, which writes nothing but the JSON-RPC channel to stdout |
 
 ## MCP
 
@@ -208,11 +218,12 @@ key is sealed with AES-256-GCM before it is stored and never leaves this server.
 Resolution order for a request:
 
 1. the instance that person attached, if any;
-2. otherwise the household instance from `SEERR_URL` and `SEERR_API_KEY`;
+2. otherwise the household instance from `SEERR_URL` and `SEERR_API_KEY`, **only
+   for addresses listed in `SEERRSENSE_HOUSEHOLD_EMAILS`**;
 3. otherwise the tools say so and point at the account page.
 
 The legacy shared token and stdio mode have no person behind them, so they
-always get the household instance.
+always get the household instance, unaffected by `SEERRSENSE_HOUSEHOLD_EMAILS`.
 
 On the household instance the API key belongs to its owner, which would file
 every request under that one name. Overseerr accepts a `userId` on a request
@@ -299,7 +310,39 @@ authorization server.
 - **Identity comes from Google.** Passkeys, 2FA and account recovery are
   Google's job; this server only checks the `id_token` and the allowlist.
 - **Access is an allowlist**, `SEERRSENSE_ALLOWED_EMAILS`, and it fails closed:
-  an unset variable admits nobody rather than everybody.
+  an unset variable admits nobody rather than everybody. `SEERRSENSE_OPEN_SIGNUP`
+  is an explicit, separate opt-in to admit any Google account instead; a typo in
+  its value (`TRUE`, `1`, `yes`) is treated as closed, so a misconfigured
+  environment variable can never silently open the server.
+- **The shared household Seerr is owner-only.** A signed-in person who has not
+  attached their own instance is offered `SEERR_URL` only if their address is in
+  `SEERRSENSE_HOUSEHOLD_EMAILS`; everyone else is told nothing is connected.
+  This also fails closed: an unset variable offers the household instance to no
+  signed-in subject.
+- **User-submitted Seerr addresses are guarded against SSRF.** A submitted
+  address must be `https`, carry no userinfo, query or fragment, and must not
+  resolve — by literal IP or by DNS, checked again on every dial, not only at
+  submission — to a loopback, private, link-local, CGNAT, or otherwise
+  non-public address (including cloud metadata endpoints like
+  `169.254.169.254`). The dial is pinned to the address the guard approved and
+  never follows a redirect, and a failure is reported to the caller generically
+  — never the upstream status, body or resolved IP. The operator's own
+  household instance is exempt, which is also what keeps a self-hoster's Seerr
+  on a private LAN working.
+- **A Seerr behind Cloudflare Access is diagnosed, not just refused.** A dial
+  answered by a redirect to a `*.cloudflareaccess.com` host, or carrying
+  Cloudflare Access response headers, gets a message naming the Zero Trust
+  fields rather than a generic failure.
+- **Rate limits** apply per IP on `/oauth/*`, `/account/session` and
+  `PUT /api/v1/account/connection`, and per authenticated subject (falling back
+  to IP) on `/mcp` and `/api/v1/*`. Every window and ceiling is an environment
+  variable — see [Configuration](#configuration). The store is per-process, so
+  a rollout briefly enforces up to double the configured limit across two pods.
+- **The semantic resolver has a daily budget**, per subject and globally
+  (`SEERRSENSE_RESOLVE_DAILY_LIMIT`, `SEERRSENSE_RESOLVE_GLOBAL_DAILY_LIMIT`),
+  so an open server's Nebius bill is bounded. A cache hit or a query answered by
+  Seerr's own search costs nothing; only a call that actually reaches the model
+  does.
 - **Clients register through Client ID Metadata Documents**, where the
   `client_id` is an https URL naming a JSON document with the client's allowed
   redirect URIs. Pre-registered clients are supported too. Dynamic Client

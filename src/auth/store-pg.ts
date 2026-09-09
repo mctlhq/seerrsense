@@ -61,6 +61,12 @@ const SCHEMA_SQL = `
         cf_access_secret_sealed   TEXT,
         updated_at                BIGINT NOT NULL
       );
+      CREATE TABLE IF NOT EXISTS resolve_usage (
+        subject TEXT   NOT NULL,
+        day     DATE   NOT NULL,
+        count   INT    NOT NULL DEFAULT 0,
+        PRIMARY KEY (subject, day)
+      );
     `;
 
 /**
@@ -262,6 +268,20 @@ export class PostgresAuthStore implements AuthStore {
 
   async deleteUserConnection(subject: string): Promise<void> {
     await this.pool.query(`DELETE FROM user_connections WHERE subject = $1`, [subject]);
+  }
+
+  async countResolve(subject: string, day: string): Promise<number> {
+    const { rows } = await this.pool.query(
+      `INSERT INTO resolve_usage (subject, day, count) VALUES ($1, $2::date, 1)
+       ON CONFLICT (subject, day) DO UPDATE SET count = resolve_usage.count + 1
+       RETURNING count`,
+      [subject, day],
+    );
+    return Number(rows[0].count);
+  }
+
+  async purgeResolveUsage(before: string): Promise<void> {
+    await this.pool.query(`DELETE FROM resolve_usage WHERE day < $1::date`, [before]);
   }
 
   async close(): Promise<void> {
