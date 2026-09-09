@@ -80,6 +80,19 @@ function isSessionRoute(url: string): boolean {
   return SESSION_PREFIXES.some((prefix) => path.startsWith(prefix));
 }
 
+/**
+ * A window of zero is not a setting, it is a mistake: it would restart the
+ * window on every request and switch the limiter off, which is the opposite of
+ * what someone tightening limits during an incident intends. A *max* of zero
+ * is meaningful — block everything — so only the window is floored.
+ */
+function envWindow(name: string, fallback: number): number {
+  const value = envInt(name, fallback);
+  if (value > 0) return value;
+  console.warn(`${name}=0 would disable the limiter rather than tighten it; using ${fallback}`);
+  return fallback;
+}
+
 function envInt(name: string, fallback: number): number {
   const raw = process.env[name];
   if (raw === undefined || raw === "") return fallback;
@@ -101,24 +114,24 @@ function rateLimitSettings() {
     // 10 requests / 5 min per IP.
     oauth: {
       max: envInt("SEERRSENSE_RATE_LIMIT_OAUTH_MAX", 10),
-      timeWindow: envInt("SEERRSENSE_RATE_LIMIT_OAUTH_WINDOW_MS", 5 * 60 * 1000),
+      timeWindow: envWindow("SEERRSENSE_RATE_LIMIT_OAUTH_WINDOW_MS", 5 * 60 * 1000),
     },
     // 5 / 5 min per IP: each call dials an arbitrary host.
     connection: {
       max: envInt("SEERRSENSE_RATE_LIMIT_CONNECTION_MAX", 5),
-      timeWindow: envInt("SEERRSENSE_RATE_LIMIT_CONNECTION_WINDOW_MS", 5 * 60 * 1000),
+      timeWindow: envWindow("SEERRSENSE_RATE_LIMIT_CONNECTION_WINDOW_MS", 5 * 60 * 1000),
     },
     // 120 / min per subject on /mcp and /api/v1/*, falling back to IP.
     subject: {
       max: envInt("SEERRSENSE_RATE_LIMIT_SUBJECT_MAX", 120),
-      timeWindow: envInt("SEERRSENSE_RATE_LIMIT_SUBJECT_WINDOW_MS", 60 * 1000),
+      timeWindow: envWindow("SEERRSENSE_RATE_LIMIT_SUBJECT_WINDOW_MS", 60 * 1000),
     },
     // Per IP, before authentication, on the token-guarded routes. Deliberately
     // looser than the per-subject limit: this one exists so a caller who never
     // authenticates is still metered, not to shape legitimate traffic.
     gate: {
       max: envInt("SEERRSENSE_RATE_LIMIT_GATE_MAX", 300),
-      timeWindow: envInt("SEERRSENSE_RATE_LIMIT_GATE_WINDOW_MS", 60 * 1000),
+      timeWindow: envWindow("SEERRSENSE_RATE_LIMIT_GATE_WINDOW_MS", 60 * 1000),
     },
   };
 }
@@ -200,7 +213,14 @@ export function buildServer(
   // rotating that header gets a fresh bucket from every IP limiter here,
   // including the one guarding the connection PUT that dials arbitrary hosts.
   // A hop count makes request.ip the address the trusted proxy actually saw.
-  const trustedProxyHops = envInt("SEERRSENSE_TRUSTED_PROXY_HOPS", 1);
+  // Defaults to 0: trust no forwarding header at all, so request.ip is the
+  // address the socket actually came from. A bare `docker run -p 8787:8787`
+  // has nothing in front of it, and a default of 1 would make proxy-addr trim
+  // the socket address and hand back the right-most X-Forwarded-For entry —
+  // caller-supplied, so every per-IP limit here would be forgeable again.
+  // Deployments behind an ingress set this to the number of hops it adds; the
+  // platform's values.yaml sets 1.
+  const trustedProxyHops = envInt("SEERRSENSE_TRUSTED_PROXY_HOPS", 0);
   const fastify = Fastify({
     // proxy-addr's function form: trusted(address, hop) is asked about each
     // hop from the socket outwards, and request.ip becomes the first address
@@ -245,33 +265,40 @@ export function buildServer(
   // every limit this PR adds. A fixed window over a Map has no such coupling,
   // and the state it holds is the same per-process state the plugin's default
   // store holds anyway.
-  const gateHits = new Map<string, { count: number; resetAt: number }>();
+  // Two rotating windows rather than one map plus a sweep. The sweep only
+  // dropped entries that had already expired, so a burst of distinct live
+  // addresses inside one window grew the map without limit and made every
+  // later request pay an O(size) scan that freed nothing — the gate would have
+  // become a CPU amplifier for exactly the traffic it exists to damp.
+  // Rotation is O(1) per request and holds at most two windows of addresses.
+  let gateCurrent = new Map<string, number>();
+  let gateWindowEnds = Date.now() + limits.gate.timeWindow;
   fastify.addHook("onRequest", async (request, reply) => {
-    if (isPublic(request.url) || isSessionRoute(request.url)) return;
-    if (limits.gate.max === 0) {
-      reply.status(429).send({ error: "too many requests" });
-      return reply;
-    }
-    const now = Date.now();
-    // Bounded: entries are dropped as they expire, and a sweep keeps a burst
-    // of distinct addresses from growing the map without limit.
-    if (gateHits.size > 10_000) {
-      for (const [key, entry] of gateHits) if (entry.resetAt <= now) gateHits.delete(key);
-    }
-    const existing = gateHits.get(request.ip);
-    const window = existing && existing.resetAt > now
-      ? existing
-      : { count: 0, resetAt: now + limits.gate.timeWindow };
-    window.count += 1;
-    gateHits.set(request.ip, window);
-    if (window.count > limits.gate.max) {
+    if (isPublic(request.url)) return;
+
+    const refuse = (retryAfterMs: number) => {
       request.log.warn({ route: "pre-auth", key: "ip" }, "rate limit exceeded");
       reply
         .status(429)
-        .header("retry-after", Math.ceil((window.resetAt - now) / 1000))
+        .header("retry-after", Math.max(1, Math.ceil(retryAfterMs / 1000)))
         .send({ error: "too many requests" });
       return reply;
+    };
+
+    if (limits.gate.max === 0) return refuse(limits.gate.timeWindow);
+
+    const now = Date.now();
+    if (now >= gateWindowEnds) {
+      // Dropping the whole map is the rotation: nothing in it is still in
+      // scope once the window has ended, and building a new one is cheaper
+      // than walking the old.
+      gateCurrent = new Map();
+      gateWindowEnds = now + limits.gate.timeWindow;
     }
+
+    const count = (gateCurrent.get(request.ip) ?? 0) + 1;
+    gateCurrent.set(request.ip, count);
+    if (count > limits.gate.max) return refuse(gateWindowEnds - now);
   });
 
   const authStore: AuthStore | undefined = authSettings.oauth

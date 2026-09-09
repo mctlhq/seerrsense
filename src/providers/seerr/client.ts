@@ -244,15 +244,43 @@ export class SeerrClient {
     if (Number.isFinite(declared) && declared > MAX_UNTRUSTED_BODY_BYTES) {
       throw new SeerrUnreachableError("could not reach that Seerr", response.status);
     }
-    const text = await response.text();
-    if (text.length > MAX_UNTRUSTED_BODY_BYTES) {
-      throw new SeerrUnreachableError("could not reach that Seerr", response.status);
-    }
+    // Counted while reading, not after: content-length is absent under chunked
+    // encoding — which the untrusted host chooses — so a check after
+    // response.text() would cap what is returned, having already buffered
+    // whatever was sent. The reader is cancelled the moment the ceiling is
+    // crossed, so nothing beyond it is ever held.
+    const text = await this.readCapped(response);
     try {
       return JSON.parse(text);
     } catch {
       throw new SeerrUnreachableError("could not reach that Seerr", response.status);
     }
+  }
+
+  private async readCapped(response: Response): Promise<string> {
+    const body = response.body;
+    // A stubbed fetch may hand back a response with no stream; there is
+    // nothing to meter in that case and text() is the whole of it.
+    if (!body) return await response.text();
+
+    const reader = body.getReader();
+    const decoder = new TextDecoder();
+    let read = 0;
+    let text = "";
+    try {
+      for (;;) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        read += value.byteLength;
+        if (read > MAX_UNTRUSTED_BODY_BYTES) {
+          throw new SeerrUnreachableError("could not reach that Seerr", response.status);
+        }
+        text += decoder.decode(value, { stream: true });
+      }
+    } finally {
+      await reader.cancel().catch(() => {});
+    }
+    return text + decoder.decode();
   }
 
   /**

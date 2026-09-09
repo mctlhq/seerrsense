@@ -123,6 +123,50 @@ describe("per-subject rate limiting", () => {
     delete process.env.SEERRSENSE_RATE_LIMIT_GATE_MAX;
   });
 
+  it("trusts no forwarding header by default, so a direct deployment is not forgeable", async () => {
+    // The hop default is 0. With nothing in front of the pod — README's own
+    // `docker run -p 8787:8787` — a default of 1 would make proxy-addr trim the
+    // socket address and return the right-most X-Forwarded-For entry, which the
+    // caller supplies. Here there is no proxy at all and the header is pure
+    // invention: every request must still land in the same bucket.
+    process.env.SEERRSENSE_RATE_LIMIT_GATE_MAX = "2";
+    delete process.env.SEERRSENSE_TRUSTED_PROXY_HOPS;
+    const { buildServer: build } = await import("../src/api/server.js?direct");
+    const app = build();
+    await app.ready();
+
+    const call = (forged: string) =>
+      app.inject({
+        method: "GET",
+        url: "/api/v1/search?query=x",
+        remoteAddress: "198.51.100.7",
+        headers: { authorization: "Bearer wrong-token", "x-forwarded-for": forged },
+      });
+
+    expect((await call("1.2.3.1")).statusCode).toBe(401);
+    expect((await call("1.2.3.2")).statusCode).toBe(401);
+    expect((await call("1.2.3.3")).statusCode).toBe(429);
+    await app.close();
+    delete process.env.SEERRSENSE_RATE_LIMIT_GATE_MAX;
+  });
+
+  it("meters the cookie-authenticated account routes too", async () => {
+    // They skip the bearer gate, not the pre-auth one: GET and DELETE on
+    // /api/v1/account/connection have no limiter of their own, so exempting
+    // them here would leave them unmetered entirely.
+    process.env.SEERRSENSE_RATE_LIMIT_GATE_MAX = "2";
+    const { buildServer: build } = await import("../src/api/server.js?account");
+    const app = build();
+    await app.ready();
+
+    const call = () => app.inject({ method: "GET", url: "/api/v1/account/connection" });
+    expect((await call()).statusCode).not.toBe(429);
+    expect((await call()).statusCode).not.toBe(429);
+    expect((await call()).statusCode).toBe(429);
+    await app.close();
+    delete process.env.SEERRSENSE_RATE_LIMIT_GATE_MAX;
+  });
+
   it("leaves health probes unlimited even after the cap is hit", async () => {
     const app = buildServer();
     await app.ready();

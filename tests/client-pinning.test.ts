@@ -59,6 +59,45 @@ describe("untrusted dial pinning", () => {
     expect(init.dispatcher).toBeInstanceOf(Agent);
   });
 
+  it("stops reading an untrusted body at the ceiling instead of after it", async () => {
+    // content-length is absent under chunked encoding, which the untrusted
+    // host chooses, so a size check after response.text() would cap what is
+    // returned having already buffered everything sent. The stream must be
+    // metered as it arrives and cancelled at the ceiling.
+    const chunk = new Uint8Array(1024 * 1024).fill(0x20);
+    let produced = 0;
+    let cancelled = false;
+    vi.stubGlobal("fetch", async () => {
+      const body = new ReadableStream<Uint8Array>({
+        pull(controller) {
+          produced += 1;
+          controller.enqueue(chunk);
+        },
+        cancel() {
+          cancelled = true;
+        },
+      });
+      return new Response(body, {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      });
+    });
+
+    const client = new SeerrClient({
+      baseUrl: "https://media.example.com",
+      apiKey: "k",
+      untrusted: true,
+      lookup: async () => ["93.184.216.34"],
+    });
+    await expect(client.describeSelf()).rejects.toThrow();
+    await client.close();
+
+    // Six 1 MiB chunks is the ceiling plus the one that crosses it; an
+    // unmetered read of this endless stream would never stop.
+    expect(produced).toBeLessThanOrEqual(8);
+    expect(cancelled).toBe(true);
+  });
+
   it("does not pin or guard the operator's own household client", async () => {
     const seen: RequestInit[] = [];
     vi.stubGlobal("fetch", async (_url: string, init: RequestInit) => {
