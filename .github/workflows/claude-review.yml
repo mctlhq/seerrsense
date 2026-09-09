@@ -1,0 +1,62 @@
+name: Claude PR review
+
+# This repository had no automated reviewer at all until now: every PR,
+# including the ones the mctl-agents implementer opens for itself, reached
+# `main` with only `CI / validate` behind it. seerrsense is the one service
+# that terminates an OAuth flow and holds other people's Seerr credentials
+# sealed at rest, so it is a poor candidate for the least review coverage in
+# the organisation.
+
+on:
+  pull_request:
+    types: [opened, reopened, synchronize, ready_for_review]
+  issue_comment:
+    types: [created]
+
+permissions: {}
+
+jobs:
+  claude-review:
+    uses: mctlhq/.github/.github/workflows/claude-review.yml@f25ff6a4ec43ecd9f58563051835a3abe062c143
+    permissions:
+      contents: read
+      pull-requests: write
+      issues: write
+      id-token: write
+    with:
+      # mctl-agents is the reason this file exists today: the Tier 2
+      # implementer opens PRs as `mctl-agents[bot]`, and without its slug
+      # here claude-code-action refuses with "Workflow initiated by
+      # non-human actor" on both tokens within seconds — a failure that
+      # reads exactly like an exhausted quota and is not one. The other
+      # three are carried from the organisation default so dependabot and
+      # release-please PRs are reviewed rather than left unmergeable.
+      allowed-bots: "mctl-claude-remote,github-actions,dependabot,mctl-agents"
+      # Everything that decides who a caller is, or what is done with the
+      # credentials they attach, lives under these two directories.
+      sensitive-paths: '^src/(auth|api)/'
+      conventions: |
+        This service is an MCP server with its own OAuth 2.1 authorization
+        server in front of it. Focus on:
+        - Authorization: PKCE handling, redirect_uri comparison (loopback
+          ignores the port, everything else is exact), single-use consent
+          handles and authorization codes, refresh-token rotation, and the
+          allowlist check that decides whether a verified Google identity
+          may sign in at all.
+        - Response headers on browser-facing routes. The consent screen is
+          deliberately `default-src 'none'` with no `script-src`; treat any
+          widening of that policy, or a new inline `<style>`/`<script>` on
+          those pages, as a finding rather than a style question.
+        - Per-user credentials. Seerr API keys and Cloudflare Access service
+          tokens are sealed with SEERRSENSE_ENCRYPTION_KEY before they reach
+          Postgres and must never be returned by an endpoint, logged, or
+          rendered into a page.
+        - Multi-tenancy: a request must reach the Seerr instance of the
+          identity that made it, never the household default, and never
+          another user's.
+        - Tests that cannot fail. Several defects here are invisible to an
+          assertion that only checks a value is present; prefer assertions
+          that break when the guard is removed.
+    secrets:
+      CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+      CLAUDE_CODE_OAUTH_TOKEN_2: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN_2 }}
