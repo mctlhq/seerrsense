@@ -136,3 +136,31 @@ describe("SeerrClient", () => {
   });
 
 });
+
+// Overseerr answers 400 to a search term containing parentheses, measured
+// against the live instance: "The Matrix (1999)" fails where "The Matrix"
+// returns results, at any term length. A year in parentheses is how both people
+// and language models naturally write a title, so it must not become an error.
+describe("search terms Overseerr will actually accept", () => {
+  it("drops a parenthesised year rather than sending a term that 400s", () => {
+    expect(SeerrClient.searchTerm("The Matrix (1999)")).toBe("The Matrix");
+    expect(SeerrClient.searchTerm("The Thing (1982) or The Thing (2011)")).toBe("The Thing or The Thing");
+  });
+
+  it("leaves an ordinary title alone", () => {
+    expect(SeerrClient.searchTerm("Spider-Man: No Way Home")).toBe("Spider-Man: No Way Home");
+    expect(SeerrClient.searchTerm("1+1")).toBe("1+1");
+  });
+
+  it("closes an unterminated parenthesis instead of searching for it", () => {
+    expect(SeerrClient.searchTerm("unclosed (paren")).toBe("unclosed");
+  });
+
+  it("does not call Seerr at all when nothing survives", async () => {
+    const fetchImpl = vi.fn();
+    const client = new SeerrClient({ baseUrl: "https://seerr.example", apiKey: "k" });
+    (client as any).fetch = fetchImpl;
+    await expect(client.search("(1999)")).resolves.toEqual([]);
+    expect(fetchImpl).not.toHaveBeenCalled();
+  });
+});

@@ -67,6 +67,9 @@ If more than one work fits, put your best answer in titleHint and the next best
 in similarTo. If you genuinely cannot tell, set titleSource to unknown and fill
 in whatever mediaType, year, genres and plotHint the query supports.
 
+titleHint and similarTo each hold one bare title and nothing else: no release
+year, no parentheses, no "or", no explanation. The year goes in the year field.
+
 year is the release year of the work you identified.
 
 Never invent or return TMDB, IMDb or other provider IDs.
