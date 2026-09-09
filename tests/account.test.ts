@@ -194,6 +194,35 @@ describe("the account page", () => {
     await app.close();
   });
 
+  it("resolves its own client without fetching anything", async () => {
+    // The page's client_id is an https URL with a path, which the resolver
+    // would otherwise treat as a metadata document and fetch — from a path that
+    // serves HTML. Production has no stub to save it, so the client is
+    // registered in code and no request may be made for it.
+    const fetched: string[] = [];
+    const watchful = (async (input: any, init?: any) => {
+      fetched.push(typeof input === "string" ? input : String(input));
+      return stubFetch(input, init);
+    }) as unknown as typeof fetch;
+
+    const app = buildServer({ fetchImpl: watchful });
+    await app.ready();
+    const response = await app.inject({
+      method: "GET",
+      url: "/oauth/authorize",
+      query: {
+        client_id: `${ISSUER}/account`,
+        redirect_uri: `${ISSUER}/account/callback`,
+        response_type: "code",
+        code_challenge: challengeFor(makeVerifier()),
+        code_challenge_method: "S256",
+      },
+    });
+    expect(response.statusCode).toBe(302);
+    expect(fetched.filter((url) => url === `${ISSUER}/account`)).toEqual([]);
+    await app.close();
+  });
+
   it("says so plainly when this server cannot sign anybody in", async () => {
     // With no OAuth configured the account API is not registered at all. The
     // page must say that rather than render a form addressed to nobody — which

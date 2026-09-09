@@ -109,7 +109,19 @@ export function loadAuthSettings(
         ? encryptionKeyFrom(parsed.SEERRSENSE_ENCRYPTION_KEY)
         : undefined,
       allowedEmails,
-      preRegisteredClients: parsePreRegisteredClients(parsed.SEERRSENSE_OAUTH_CLIENTS),
+      // The account page is a client of this server. Its client_id is an https
+      // URL with a path, which would otherwise be treated as a Client ID
+      // Metadata Document and fetched — from ourselves, where that path serves
+      // HTML, not JSON. Registering it here is both correct and cheaper.
+      preRegisteredClients: [
+        {
+          clientId: `${issuer}/account`,
+          clientName: "SeerrSense account page",
+          redirectUris: [`${issuer}/account/callback`],
+          source: "pre-registered" as const,
+        },
+        ...parsePreRegisteredClients(parsed.SEERRSENSE_OAUTH_CLIENTS),
+      ],
       accessTokenTtl: parsed.SEERRSENSE_ACCESS_TOKEN_TTL,
       refreshTokenTtl: parsed.SEERRSENSE_REFRESH_TOKEN_TTL,
       databaseUrl: parsed.DATABASE_URL,
