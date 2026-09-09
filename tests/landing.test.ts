@@ -164,8 +164,10 @@ describe("landing page", () => {
       const rule = payload.slice(payload.indexOf(selector + " {"), payload.indexOf(selector + " {") + 200);
       expect(rule, selector).toContain("overflow-x: auto");
     }
+    // The flow diagram was removed with the audience split; the tools table is
+    // what still needs the box on a phone. The .flow-scroll rule is asserted
+    // above and stays in the sheet for whatever uses it next.
     const page = await app.inject({ method: "GET", url: "/" });
-    expect(page.payload).toContain('class="flow-scroll"');
     expect(page.payload).toContain('class="table-scroll"');
   });
 
