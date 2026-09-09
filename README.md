@@ -327,7 +327,10 @@ authorization server.
   attached their own instance is offered `SEERR_URL` only if their address is in
   `SEERRSENSE_HOUSEHOLD_EMAILS`; everyone else is told nothing is connected.
   This also fails closed: an unset variable offers the household instance to no
-  signed-in subject. The account page states this rather than guessing: it
+  signed-in subject. The one exception is a deployment with no
+  `SEERRSENSE_ENCRYPTION_KEY`, where there is no per-user path to resolve at
+  all and every caller reaches the household instance with no address checked.
+  The account page states whichever of the two applies rather than guessing: it
   reads the resolver's own `householdFallback` answer instead of keeping a
   second copy of the email list.
 - **Signing out ends the browser session, not MCP access.** `DELETE

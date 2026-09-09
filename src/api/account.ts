@@ -80,7 +80,7 @@ export function registerAccountRoutes(
       // What this caller reaches with no connection of their own — the
       // resolver's own answer, not a second reading of
       // SEERRSENSE_HOUSEHOLD_EMAILS.
-      fallback: tenants.householdFallback(session.email),
+      fallback: tenants.householdFallback(session.email, session.subject),
       // The key itself is never returned, not even masked.
       seerrUrl: connection?.seerrUrl,
       cfAccessConfigured: connection?.cfAccessClientIdSealed !== undefined,
@@ -192,7 +192,7 @@ export function registerAccountRoutes(
     tenants.forget(session.subject);
     return reply.header("cache-control", "no-store").send({
       connected: false,
-      fallback: tenants.householdFallback(session.email),
+      fallback: tenants.householdFallback(session.email, session.subject),
     });
   });
 

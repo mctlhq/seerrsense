@@ -602,19 +602,26 @@ describe("what the account page reports", () => {
   it("reports none for every caller when no household client is configured", async () => {
     const previous = process.env.SEERR_API_KEY;
     delete process.env.SEERR_API_KEY;
-    const app = await makeApp();
-    const cookie = await signIn(app, ALLOWED_EMAIL);
+    // The restore is in a finally because createDefaultSeerrClient reads this
+    // at call time: leaking the deletion would build every later makeApp() in
+    // this file with no household client, burying the real failure under
+    // unrelated ones.
+    try {
+      const app = await makeApp();
+      const cookie = await signIn(app, ALLOWED_EMAIL);
 
-    const body = JSON.parse(
-      (await app.inject({ method: "GET", url: "/api/v1/account/connection", headers: { cookie } })).payload,
-    );
-    // A second copy of SEERRSENSE_HOUSEHOLD_EMAILS read in account.ts would
-    // have told this listed address it has a shared instance that
-    // createDefaultSeerrClient() never built.
-    expect(body.fallback).toBe("none");
+      const body = JSON.parse(
+        (await app.inject({ method: "GET", url: "/api/v1/account/connection", headers: { cookie } })).payload,
+      );
+      // A second copy of SEERRSENSE_HOUSEHOLD_EMAILS read in account.ts would
+      // have told this listed address it has a shared instance that
+      // createDefaultSeerrClient() never built.
+      expect(body.fallback).toBe("none");
 
-    await app.close();
-    process.env.SEERR_API_KEY = previous;
+      await app.close();
+    } finally {
+      process.env.SEERR_API_KEY = previous;
+    }
   });
 
   it("carries all three distinct status sentences and still branches on fallback", async () => {
@@ -661,6 +668,11 @@ describe("signing out", () => {
     expect(raw).toContain("Path=/");
     expect(raw).toContain("HttpOnly");
     expect(raw).toContain("SameSite=Lax");
+    // ISSUER is https, so the cookie was set Secure and must be cleared
+    // Secure too — a clear whose attributes differ sets a second cookie and
+    // leaves the original in place. Dropping `secure` from clearCookie must
+    // fail here.
+    expect(raw).toContain("Secure");
     // Cleared, not merely re-set: the browser is told to drop it.
     expect(raw).toMatch(/Expires=|Max-Age=0/);
 

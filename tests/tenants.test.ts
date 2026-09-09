@@ -148,12 +148,47 @@ describe("resolving which Seerr a caller reaches", () => {
     );
 
     const listed = await resolver.resolve(authFor("google:listed", "listed@example.com"));
-    expect(resolver.householdFallback("listed@example.com")).toBe("household");
+    expect(resolver.householdFallback("listed@example.com", "google:listed")).toBe("household");
     expect(listed.source).toBe("household");
 
     const unlisted = await resolver.resolve(authFor("google:unlisted", "unlisted@example.com"));
-    expect(resolver.householdFallback("unlisted@example.com")).toBe("none");
+    expect(resolver.householdFallback("unlisted@example.com", "google:unlisted")).toBe("none");
     expect(unlisted.source).toBe("none");
+  });
+
+  // The configuration the first version of this fix got wrong: with no
+  // encryption key there is no per-user path, so resolve() admits an
+  // unlisted signed-in subject to the shared instance without consulting
+  // SEERRSENSE_HOUSEHOLD_EMAILS. The page must say the same thing, or it
+  // tells someone nothing is connected while their assistant is served by
+  // the household Seerr.
+  it("agrees with itself with no encryption key, where the allowlist does not apply", async () => {
+    const shared = household({ findUserIdByEmail: vi.fn().mockResolvedValue(1) } as any);
+    const resolver = new TenantResolver(
+      new MemoryAuthStore(),
+      undefined,
+      shared,
+      new Set(["listed@example.com"]),
+    );
+
+    const unlisted = await resolver.resolve(authFor("google:unlisted", "unlisted@example.com"));
+    expect(unlisted.source).toBe("household");
+    expect(resolver.householdFallback("unlisted@example.com", "google:unlisted")).toBe("household");
+
+    const listed = await resolver.resolve(authFor("google:listed", "listed@example.com"));
+    expect(listed.source).toBe("household");
+    expect(resolver.householdFallback("listed@example.com", "google:listed")).toBe("household");
+  });
+
+  // Same invariant from the other side: without a store there is likewise no
+  // per-user path.
+  it("agrees with itself with no store", async () => {
+    const shared = household({ findUserIdByEmail: vi.fn().mockResolvedValue(1) } as any);
+    const resolver = new TenantResolver(undefined, KEY, shared, new Set(["listed@example.com"]));
+
+    const unlisted = await resolver.resolve(authFor("google:unlisted", "unlisted@example.com"));
+    expect(unlisted.source).toBe("household");
+    expect(resolver.householdFallback("unlisted@example.com", "google:unlisted")).toBe("household");
   });
 
   it("householdFallback makes no network call and does not touch the cache", async () => {
@@ -162,7 +197,7 @@ describe("resolving which Seerr a caller reaches", () => {
     const shared = household({ findUserIdByEmail: vi.fn().mockResolvedValue(1) } as any);
     const resolver = new TenantResolver(store, KEY, shared, new Set(["listed@example.com"]));
 
-    expect(resolver.householdFallback("listed@example.com")).toBe("household");
+    expect(resolver.householdFallback("listed@example.com", "google:listed")).toBe("household");
     expect(shared.findUserIdByEmail).not.toHaveBeenCalled();
     expect(spy).not.toHaveBeenCalled();
 
