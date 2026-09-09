@@ -1,5 +1,13 @@
 # Changelog
 
+## [1.4.3](https://github.com/mctlhq/seerrsense/compare/1.4.2...1.4.3) (2026-09-09)
+
+
+### Bug Fixes
+
+* strip parentheses from Seerr search terms ([fc30e10](https://github.com/mctlhq/seerrsense/commit/fc30e10b0800a496606fae31e400d18e69335a3e))
+* strip parentheses from Seerr search terms ([89d9274](https://github.com/mctlhq/seerrsense/commit/89d9274b3e51b7369d4a10a27008d97aca535186))
+
 ## [1.4.2](https://github.com/mctlhq/seerrsense/compare/1.4.1...1.4.2) (2026-09-09)
 
 
