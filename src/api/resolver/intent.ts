@@ -3,9 +3,20 @@ import { generateObject } from "ai";
 import { createOpenAICompatible } from "@ai-sdk/openai-compatible";
 import { config } from "../../core/config.js";
 
+/**
+ * How the title in `titleHint` was arrived at. The resolver reports a lower
+ * confidence for a title it inferred than for one the user typed, and lower
+ * still for one that is only a restatement of the query, so a caller can tell
+ * a recognition from a guess. Optional because a model may omit it; a title
+ * with no stated provenance is treated as inferred.
+ */
+export const TitleSourceSchema = z.enum(["stated", "recognised", "unknown"]);
+export type TitleSource = z.infer<typeof TitleSourceSchema>;
+
 export const MediaIntentSchema = z.object({
   mediaType: z.enum(["movie", "tv"]).optional(),
   titleHint: z.string().optional(),
+  titleSource: TitleSourceSchema.optional(),
   year: z.number().int().optional(),
   people: z.array(z.string()).optional(),
   director: z.string().optional(),
@@ -19,6 +30,47 @@ export type MediaIntent = z.infer<typeof MediaIntentSchema>;
 export interface IntentExtractor {
   extract(query: string): Promise<MediaIntent>;
 }
+
+/**
+ * Naming the work is the task, not a liberty.
+ *
+ * The previous prompt ended with "return only information supported or
+ * strongly implied by the query", and the model obeyed it literally: asked for
+ * "a programmer learns the world is a simulation" it put that whole sentence in
+ * titleHint rather than answering "The Matrix", and the resolver then searched
+ * Seerr for the sentence. The Russian phrasing produced titleHint "программист"
+ * with the real answer stranded in similarTo. So the prompt has to say plainly
+ * that identifying a described work is what is wanted, and that the answer goes
+ * in titleHint as a canonical English title.
+ */
+const SYSTEM_PROMPT = `
+You identify films and television series from a description.
+
+A query may name a work outright, or it may only describe it: its plot, its
+characters, its premise, its ending. Either way your job is to say which work
+it is.
+
+titleHint is the work's canonical English title, the one The Movie Database
+lists it under. Never put the user's own words there, and never put a
+description there. A query written in another language still gets an English
+title back.
+
+titleSource says how you arrived at it:
+  stated      the query named the work; you are repeating that name
+  recognised  the query only described it and you identified it
+  unknown     you cannot tell which work is meant, so titleHint stays empty
+
+Recognising a work from its description is the point of this task. "A
+programmer learns the world is a simulation" is The Matrix. Say so.
+
+If more than one work fits, put your best answer in titleHint and the next best
+in similarTo. If you genuinely cannot tell, set titleSource to unknown and fill
+in whatever mediaType, year, genres and plotHint the query supports.
+
+year is the release year of the work you identified.
+
+Never invent or return TMDB, IMDb or other provider IDs.
+`;
 
 export class NebiusIntentExtractor implements IntentExtractor {
   private model: ReturnType<typeof createOpenAICompatible>;
@@ -43,13 +95,7 @@ export class NebiusIntentExtractor implements IntentExtractor {
       model: this.model(this.modelName),
       schema: MediaIntentSchema,
       temperature: 0,
-      system: `
-Extract media search intent from the user's query.
-
-Never invent or return TMDB, IMDb or other provider IDs.
-Titles and years are hints only.
-Return only information supported or strongly implied by the query.
-`,
+      system: SYSTEM_PROMPT,
       prompt: query,
     });
 
