@@ -22,6 +22,8 @@ const OAuthEnvSchema = z.object({
   GOOGLE_OAUTH_CLIENT_SECRET: z.string().min(1).optional(),
   SEERRSENSE_OAUTH_JWT_SIGNING_KEY: z.string().optional(),
   SEERRSENSE_ALLOWED_EMAILS: z.string().optional(),
+  SEERRSENSE_OPEN_SIGNUP: z.string().optional(),
+  SEERRSENSE_HOUSEHOLD_EMAILS: z.string().optional(),
   SEERRSENSE_ENCRYPTION_KEY: z.string().optional(),
   SEERRSENSE_OAUTH_CLIENTS: z.string().optional(),
   SEERRSENSE_LEGACY_TOKEN_ENABLED: z.string().optional(),
@@ -40,6 +42,21 @@ export interface OAuthConfig {
   /** Seals the Seerr API keys people attach. Absent means nobody can attach one. */
   encryptionKey?: Buffer;
   allowedEmails: Set<string>;
+  /**
+   * When true, any Google account that passes the id_token and
+   * email_verified checks is admitted, without consulting allowedEmails.
+   * Strict equality to the string "true": a typo, "1" or "yes" all mean
+   * closed, so a misspelled environment variable cannot silently open the
+   * server.
+   */
+  openSignup: boolean;
+  /**
+   * Addresses allowed to fall back to the operator-configured household
+   * Seerr when they have no user_connections row of their own. Fails
+   * closed: unset or empty offers the household instance to no signed-in
+   * subject.
+   */
+  householdEmails: Set<string>;
   preRegisteredClients: ResolvedClient[];
   accessTokenTtl: number;
   refreshTokenTtl: number;
@@ -95,6 +112,23 @@ export function loadAuthSettings(
       .map((email) => email.trim().toLowerCase())
       .filter(Boolean),
   );
+  const householdEmails = new Set(
+    (parsed.SEERRSENSE_HOUSEHOLD_EMAILS ?? "")
+      .split(",")
+      .map((email) => email.trim().toLowerCase())
+      .filter(Boolean),
+  );
+  const openSignup = parsed.SEERRSENSE_OPEN_SIGNUP === "true";
+  if (openSignup && !parsed.SEERRSENSE_ENCRYPTION_KEY) {
+    // Not a hard failure: a self-hoster may run open signup on a server they
+    // administer directly, without ever attaching a per-user Seerr. But on the
+    // hosted instance this means people are admitted to a server they cannot
+    // use, which is worth a loud warning rather than a silent no-op.
+    console.warn(
+      "SEERRSENSE_OPEN_SIGNUP is true but SEERRSENSE_ENCRYPTION_KEY is not set: " +
+        "people will be able to sign in but nobody will be able to attach a Seerr",
+    );
+  }
 
   return {
     legacyToken: legacy,
@@ -109,6 +143,8 @@ export function loadAuthSettings(
         ? encryptionKeyFrom(parsed.SEERRSENSE_ENCRYPTION_KEY)
         : undefined,
       allowedEmails,
+      openSignup,
+      householdEmails,
       // The account page is a client of this server. Its client_id is an https
       // URL with a path, which would otherwise be treated as a Client ID
       // Metadata Document and fetched — from ourselves, where that path serves

@@ -75,6 +75,15 @@ async function stubFetch(input: any, init?: any): Promise<Response> {
     if (!seerrAnswers.ok) return new Response("no", { status: 401 });
     return json(seerrAnswers.body);
   }
+  // A Seerr sitting behind Cloudflare Access: answers every request with a
+  // redirect to the Zero Trust login host.
+  if (url.startsWith("https://behind-access.example")) {
+    seerrCalls.push({ url, headers: (init?.headers ?? {}) as Record<string, string> });
+    return new Response(null, {
+      status: 302,
+      headers: { location: "https://team.cloudflareaccess.com/cdn-cgi/access/login/xyz" },
+    });
+  }
   throw new Error(`unexpected fetch in test: ${url}`);
 }
 
@@ -91,14 +100,23 @@ beforeAll(async () => {
   process.env.SEERRSENSE_OAUTH_JWT_SIGNING_KEY = "x".repeat(48);
   process.env.SEERRSENSE_ALLOWED_EMAILS = ALLOWED_EMAIL;
   process.env.SEERRSENSE_ENCRYPTION_KEY = ENCRYPTION_KEY;
+  // Fails closed otherwise: the SSRF guard's household-ownership restriction
+  // (issue #44) would take the shared instance away from every test here that
+  // relies on the pre-attachment fallback.
+  process.env.SEERRSENSE_HOUSEHOLD_EMAILS = ALLOWED_EMAIL;
   // SeerrClient talks through the global fetch, so the stub has to be global as
   // well as injected: the credential check is a real call to the user's Seerr.
   vi.stubGlobal("fetch", stubFetch);
   ({ buildServer } = await import("../src/api/server.js"));
 });
 
+/** Stands in for the SSRF guard's DNS lookup, so a test hostname like
+ * "mine.example" resolves to a public, non-blocked address instead of
+ * hitting real DNS. */
+const publicLookup = async () => ["93.184.216.34"];
+
 async function makeApp() {
-  const app = buildServer({ fetchImpl: stubFetch as unknown as typeof fetch });
+  const app = buildServer({ fetchImpl: stubFetch as unknown as typeof fetch, lookup: publicLookup });
   await app.ready();
   return app;
 }
@@ -398,7 +416,10 @@ describe("attaching a Seerr", () => {
       payload: { seerrUrl: "https://mine.example", apiKey: "wrong" },
     });
     expect(response.statusCode).toBe(400);
-    expect(JSON.parse(response.payload).error).toContain("did not accept");
+    // Untrusted (per-user) dials raise a typed SeerrUnreachableError, mapped to
+    // a generic message that carries no upstream status: see guard.ts and
+    // client.ts's fetchUntrusted.
+    expect(JSON.parse(response.payload).error).toContain("Could not reach that Seerr");
 
     const state = await app.inject({
       method: "GET",
@@ -426,6 +447,49 @@ describe("attaching a Seerr", () => {
     expect(moved.statusCode).toBe(200);
     // Nobody had to re-type a secret they no longer have to hand.
     expect(seerrCalls[0].headers["X-Api-Key"]).toBe("my-key");
+    await app.close();
+  });
+
+  it("refuses a blocked address before any network call is made", async () => {
+    const app = await makeApp();
+    const cookie = await signIn(app);
+    seerrCalls = [];
+
+    for (const seerrUrl of [
+      "http://media.example.com",
+      "https://10.0.0.1",
+      "https://169.254.169.254",
+      "https://[::1]",
+    ]) {
+      const response = await app.inject({
+        method: "PUT",
+        url: "/api/v1/account/connection",
+        headers: { cookie },
+        payload: { seerrUrl, apiKey: "my-key" },
+      });
+      expect(response.statusCode, seerrUrl).toBe(400);
+    }
+    // Not one of the blocked addresses ever reached a fetch call.
+    expect(seerrCalls).toEqual([]);
+    await app.close();
+  });
+
+  it("names Cloudflare Access rather than the generic failure", async () => {
+    const app = await makeApp();
+    const cookie = await signIn(app);
+
+    const response = await app.inject({
+      method: "PUT",
+      url: "/api/v1/account/connection",
+      headers: { cookie },
+      payload: { seerrUrl: "https://behind-access.example", apiKey: "my-key" },
+    });
+    expect(response.statusCode).toBe(400);
+    const body = JSON.parse(response.payload);
+    expect(body.error).toContain("Cloudflare Access");
+    expect(body.error).toContain("Zero Trust");
+    // Neither the redirect target nor a status code leaks into the message.
+    expect(body.error).not.toContain("cloudflareaccess.com");
     await app.close();
   });
 

@@ -97,6 +97,10 @@ beforeAll(async () => {
   process.env.GOOGLE_OAUTH_CLIENT_SECRET = "google-client-secret";
   process.env.SEERRSENSE_OAUTH_JWT_SIGNING_KEY = "x".repeat(48);
   process.env.SEERRSENSE_ALLOWED_EMAILS = ALLOWED_EMAIL;
+  // Otherwise the household restriction added for issue #44 would take the
+  // shared instance away from a signed-in subject with no connection of its
+  // own, which several tests below rely on.
+  process.env.SEERRSENSE_HOUSEHOLD_EMAILS = ALLOWED_EMAIL;
   ({ buildServer } = await import("../src/api/server.js"));
 });
 

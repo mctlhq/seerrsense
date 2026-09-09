@@ -196,11 +196,35 @@ export async function redeemAuthorizationCode(
   };
 }
 
+/** Per-IP rate limit applied to every route below that an anonymous caller
+ * can hit before signing in. `undefined` means unlimited (used in tests that
+ * do not care about the limiter). */
+export interface OAuthRateLimit {
+  max: number;
+  timeWindow: number;
+}
+
+function ipRateLimited(rateLimit: OAuthRateLimit | undefined, routeName: string) {
+  if (!rateLimit) return {};
+  return {
+    config: {
+      rateLimit: {
+        max: rateLimit.max,
+        timeWindow: rateLimit.timeWindow,
+        keyGenerator: (req: FastifyRequest) => req.ip,
+        onExceeded: (req: FastifyRequest) => {
+          req.log.warn({ route: routeName, key: "ip" }, "rate limit exceeded");
+        },
+      },
+    },
+  };
+}
+
 export function registerOAuthRoutes(
   fastify: FastifyInstance,
   config: OAuthConfig,
   store: AuthStore,
-  deps: { fetchImpl?: typeof fetch } = {},
+  deps: { fetchImpl?: typeof fetch; rateLimit?: OAuthRateLimit } = {},
 ) {
   // RFC 6749 §4.1.3 defines the token request as form-encoded, and that is what
   // real clients send. Fastify parses only JSON out of the box, so without this
@@ -270,7 +294,7 @@ export function registerOAuthRoutes(
     );
   }
 
-  fastify.get("/oauth/authorize", async (request: FastifyRequest, reply: FastifyReply) => {
+  fastify.get("/oauth/authorize", ipRateLimited(deps.rateLimit, "/oauth/authorize"), async (request: FastifyRequest, reply: FastifyReply) => {
     const query = AuthorizeQuerySchema.safeParse(request.query);
     if (!query.success) {
       // Nothing is redirected here: the redirect_uri is not trusted until the
@@ -333,7 +357,7 @@ export function registerOAuthRoutes(
     return reply.redirect(url, 302);
   });
 
-  fastify.get("/oauth/google/callback", async (request: FastifyRequest, reply: FastifyReply) => {
+  fastify.get("/oauth/google/callback", ipRateLimited(deps.rateLimit, "/oauth/google/callback"), async (request: FastifyRequest, reply: FastifyReply) => {
     const query = request.query as Record<string, string | undefined>;
     if (!query.state) return oauthError(reply, 400, "invalid_request", "state is missing");
 
@@ -360,8 +384,10 @@ export function registerOAuthRoutes(
     }
 
     // Fail closed: an empty allowlist admits nobody, so a missing environment
-    // variable cannot silently open the server to every Google account.
-    if (!config.allowedEmails.has(identity.email)) {
+    // variable cannot silently open the server to every Google account. Open
+    // signup, when on, skips the allowlist entirely rather than requiring it
+    // to be emptied out to have the same effect.
+    if (!config.openSignup && !config.allowedEmails.has(identity.email)) {
       request.log.warn({ email: identity.email }, "rejected a Google account outside the allowlist");
       return redirectError(reply, pending.redirectUri, "access_denied",
         "this account is not allowed to use this server", pending.clientState, config.issuer);
@@ -409,7 +435,7 @@ export function registerOAuthRoutes(
       );
   });
 
-  fastify.post("/oauth/consent", async (request: FastifyRequest, reply: FastifyReply) => {
+  fastify.post("/oauth/consent", ipRateLimited(deps.rateLimit, "/oauth/consent"), async (request: FastifyRequest, reply: FastifyReply) => {
     const body = (request.body ?? {}) as { code?: string; decision?: string };
     if (typeof body.code !== "string" || body.code.length === 0) {
       return oauthError(reply, 400, "invalid_request", "this consent form is incomplete");
@@ -445,7 +471,7 @@ export function registerOAuthRoutes(
     return reply.redirect(url.toString(), 302);
   });
 
-  fastify.post("/oauth/token", async (request: FastifyRequest, reply: FastifyReply) => {
+  fastify.post("/oauth/token", ipRateLimited(deps.rateLimit, "/oauth/token"), async (request: FastifyRequest, reply: FastifyReply) => {
     const body = TokenBodySchema.safeParse(request.body ?? {});
     if (!body.success) {
       return oauthError(reply, 400, "invalid_request", body.error.issues[0]?.message ?? "invalid request");

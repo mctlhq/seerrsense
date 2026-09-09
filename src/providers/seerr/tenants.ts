@@ -16,6 +16,10 @@ export interface Tenant {
   email: string;
   attributedUserId?: number;
   source: "own" | "household" | "none";
+  /** The OAuth subject this tenant was resolved for. Undefined for the legacy
+   * shared token and stdio mode, where there is no subject to key on. This is
+   * what the model resolve budget keys on. */
+  subject?: string;
 }
 
 interface CacheEntry {
@@ -38,7 +42,10 @@ export class TenantResolver {
     private readonly store: AuthStore | undefined,
     private readonly encryptionKey: Buffer | undefined,
     private readonly household: SeerrClient | undefined,
+    private readonly householdEmails: Set<string> = new Set(),
     private readonly ttlMs = 60_000,
+    /** Injectable for tests; forwarded to every per-user SeerrClient's guard. */
+    private readonly lookup?: (host: string) => Promise<string[]>,
   ) {}
 
   async resolve(auth: AuthInfo | undefined): Promise<Tenant> {
@@ -46,9 +53,10 @@ export class TenantResolver {
     const email = typeof auth?.extra?.email === "string" ? auth.extra.email : "";
 
     // No identity at all: the legacy shared token and stdio mode. They get the
-    // household instance, which is exactly what they had before.
+    // household instance, which is exactly what they had before, with no
+    // address to check.
     if (!subject || subject === "static-token" || !this.store || !this.encryptionKey) {
-      return this.householdTenant(email);
+      return this.householdTenant(email, subject, false);
     }
 
     const cached = this.cache.get(subject);
@@ -68,12 +76,15 @@ export class TenantResolver {
           cfAccessClientSecret: connection.cfAccessClientSecretSealed
             ? open(connection.cfAccessClientSecretSealed, this.encryptionKey)
             : undefined,
+          untrusted: true,
+          lookup: this.lookup,
         }),
         email: connection.email || email,
         source: "own",
+        subject,
       };
     } else {
-      tenant = await this.householdTenant(email);
+      tenant = await this.householdTenant(email, subject, true);
     }
 
     this.cache.set(subject, { tenant, expiresAt: Date.now() + this.ttlMs });
@@ -85,8 +96,21 @@ export class TenantResolver {
     this.cache.delete(subject);
   }
 
-  private async householdTenant(email: string): Promise<Tenant> {
-    if (!this.household) return { email, source: "none" };
+  /**
+   * `ownerOnly` is true on the signed-in path, where a caller with no
+   * user_connections row of their own must be a named household owner to
+   * reach the shared instance. It is false for the legacy shared token and
+   * stdio mode, which have no address to check and keep today's behaviour.
+   */
+  private async householdTenant(
+    email: string,
+    subject: string | undefined,
+    ownerOnly: boolean,
+  ): Promise<Tenant> {
+    if (!this.household) return { email, source: "none", subject };
+    if (ownerOnly && !this.householdEmails.has(email.toLowerCase())) {
+      return { email, source: "none", subject };
+    }
     // On the shared instance the API key belongs to the owner, so a request
     // would otherwise be filed under their name. Overseerr accepts a userId,
     // and the person's own address is what identifies them there.
@@ -98,7 +122,7 @@ export class TenantResolver {
         // Attribution is a nicety; failing to look it up must not stop a search.
       }
     }
-    return { client: this.household, email, attributedUserId, source: "household" };
+    return { client: this.household, email, attributedUserId, source: "household", subject };
   }
 }
 

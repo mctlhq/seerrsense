@@ -6,8 +6,15 @@ import { MediaTypeSchema } from "../core/media.js";
 import { MediaRequestService } from "../api/service.js";
 import { MediaResolver } from "../api/resolver/index.js";
 import { NebiusIntentExtractor } from "../api/resolver/intent.js";
+import { BudgetedIntentExtractor, ResolveBudgetError, type ResolveBudgetOptions } from "../api/resolver/budget.js";
+import type { AuthStore } from "../auth/store.js";
 import { config } from "../core/config.js";
 import { SCOPE_REQUEST } from "../auth/config.js";
+
+export interface McpBudget {
+  store: AuthStore;
+  options: ResolveBudgetOptions;
+}
 
 /**
  * One MCP server for one caller.
@@ -15,8 +22,11 @@ import { SCOPE_REQUEST } from "../auth/config.js";
  * `scopes` is what the caller was granted; `tenant` is which Seerr they reach
  * and as whom. Both are undefined in stdio mode, where the client owns the
  * process: there is nothing to scope and only the local instance to talk to.
+ * `budget`, likewise, is undefined in stdio mode and whenever there is no
+ * database-backed store to count against — the daily resolve ceiling then
+ * simply does not apply.
  */
-export function createSeerrSenseMcpServer(scopes?: string[], tenant?: Tenant) {
+export function createSeerrSenseMcpServer(scopes?: string[], tenant?: Tenant, budget?: McpBudget) {
   const mcpServer = new McpServer({
     name: "SeerrSense",
     version: "1.0.0"
@@ -35,6 +45,9 @@ export function createSeerrSenseMcpServer(scopes?: string[], tenant?: Tenant) {
   let intentExtractor;
   if (config.NEBIUS_API_KEY) {
     intentExtractor = new NebiusIntentExtractor();
+    if (budget) {
+      intentExtractor = new BudgetedIntentExtractor(intentExtractor, budget.store, tenant?.subject, budget.options);
+    }
   }
   const mediaResolver = client ? new MediaResolver(client, intentExtractor) : undefined;
 

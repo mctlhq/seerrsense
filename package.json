@@ -8,7 +8,7 @@
     "test": "tests"
   },
   "scripts": {
-    "test": "SEERR_API_KEY=test SEERRSENSE_AUTH_TOKEN=secret123 vitest run",
+    "test": "SEERR_API_KEY=test SEERRSENSE_AUTH_TOKEN=secret123 LOG_LEVEL=silent vitest run",
     "dev": "tsx src/index.ts",
     "build": "tsc",
     "typecheck": "tsc --noEmit",
@@ -22,6 +22,7 @@
   "dependencies": {
     "@ai-sdk/openai-compatible": "^3.0.44",
     "@fastify/cookie": "^11.1.2",
+    "@fastify/rate-limit": "^10.3.0",
     "@fastify/static": "^10.1.3",
     "@modelcontextprotocol/fastify": "^2.0.0",
     "@modelcontextprotocol/node": "^2.0.0",
@@ -31,6 +32,7 @@
     "fastify": "^5.12.3",
     "jose": "^6.2.12",
     "pg": "^8.23.0",
+    "undici": "^7.16.0",
     "zod": "^4.5.4"
   },
   "devDependencies": {

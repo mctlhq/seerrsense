@@ -4,16 +4,16 @@ import fastifyStatic from "@fastify/static";
 import fastifyCookie from "@fastify/cookie";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
-import Fastify from "fastify";
+import Fastify, { type FastifyRequest } from "fastify";
 import { createSeerrSenseMcpServer } from "../mcp/server.js";
 import { createDefaultSeerrClient } from "../providers/seerr/client.js";
 import { notConnectedMessage, TenantResolver, type Tenant } from "../providers/seerr/tenants.js";
 import { MediaParamsSchema, RequestBodySchema } from "../core/media.js";
 import { assertHttpConfig, config as rawConfig } from "../core/config.js";
-import { createMcpFastifyApp } from "@modelcontextprotocol/fastify";
 import { MediaRequestService } from "./service.js";
 import { MediaResolver } from "./resolver/index.js";
-import { NebiusIntentExtractor } from "./resolver/intent.js";
+import { NebiusIntentExtractor, type IntentExtractor } from "./resolver/intent.js";
+import { BudgetedIntentExtractor, ResolveBudgetError } from "./resolver/budget.js";
 import { z } from "zod";
 import { loadAuthSettings, SCOPE_READ } from "../auth/config.js";
 import { redeemAuthorizationCode, registerOAuthRoutes } from "../auth/routes.js";
@@ -22,6 +22,7 @@ import { PostgresAuthStore } from "../auth/store-pg.js";
 import { authenticate, UnauthorizedError, wwwAuthenticate } from "../auth/verifier.js";
 import { registerAccountRoutes } from "./account.js";
 import { issueSession, SESSION_COOKIE } from "../auth/session.js";
+import rateLimit from "@fastify/rate-limit";
 
 const SearchQuerySchema = z.object({ query: z.string().min(1) });
 
@@ -79,7 +80,90 @@ function isSessionRoute(url: string): boolean {
   return SESSION_PREFIXES.some((prefix) => path.startsWith(prefix));
 }
 
-export function buildServer(deps: { store?: AuthStore; fetchImpl?: typeof fetch } = {}) {
+function envInt(name: string, fallback: number): number {
+  const raw = process.env[name];
+  if (!raw) return fallback;
+  const parsed = Number(raw);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
+}
+
+/** Every window/ceiling here is retunable in gitops without a release. */
+function rateLimitSettings() {
+  return {
+    // 10 requests / 5 min per IP.
+    oauth: {
+      max: envInt("SEERRSENSE_RATE_LIMIT_OAUTH_MAX", 10),
+      timeWindow: envInt("SEERRSENSE_RATE_LIMIT_OAUTH_WINDOW_MS", 5 * 60 * 1000),
+    },
+    // 5 / 5 min per IP: each call dials an arbitrary host.
+    connection: {
+      max: envInt("SEERRSENSE_RATE_LIMIT_CONNECTION_MAX", 5),
+      timeWindow: envInt("SEERRSENSE_RATE_LIMIT_CONNECTION_WINDOW_MS", 5 * 60 * 1000),
+    },
+    // 120 / min per subject on /mcp and /api/v1/*, falling back to IP.
+    subject: {
+      max: envInt("SEERRSENSE_RATE_LIMIT_SUBJECT_MAX", 120),
+      timeWindow: envInt("SEERRSENSE_RATE_LIMIT_SUBJECT_WINDOW_MS", 60 * 1000),
+    },
+  };
+}
+
+function resolveBudgetSettings() {
+  return {
+    dailyLimit: envInt("SEERRSENSE_RESOLVE_DAILY_LIMIT", 50),
+    globalDailyLimit: envInt("SEERRSENSE_RESOLVE_GLOBAL_DAILY_LIMIT", 2000),
+  };
+}
+
+function subjectOf(request: { raw: unknown }): string | undefined {
+  const auth = (request.raw as { auth?: AuthInfo }).auth;
+  return typeof auth?.extra?.subject === "string" ? auth.extra.subject : undefined;
+}
+
+function ipRateLimited(rateLimit: { max: number; timeWindow: number }, routeName: string) {
+  return {
+    config: {
+      rateLimit: {
+        max: rateLimit.max,
+        timeWindow: rateLimit.timeWindow,
+        keyGenerator: (req: FastifyRequest) => req.ip,
+        onExceeded: (req: FastifyRequest) => {
+          req.log.warn({ route: routeName, key: "ip" }, "rate limit exceeded");
+        },
+      },
+    },
+  };
+}
+
+/** Per-subject on an authenticated route, falling back to IP when there is
+ * no subject — a request that never reached the bearer preHandler, or the
+ * legacy shared token / stdio path, which has no OAuth subject at all. */
+function subjectRateLimited(rateLimit: { max: number; timeWindow: number }, routeName: string) {
+  return {
+    config: {
+      rateLimit: {
+        max: rateLimit.max,
+        timeWindow: rateLimit.timeWindow,
+        keyGenerator: (req: FastifyRequest) => subjectOf(req) ?? req.ip,
+        onExceeded: (req: FastifyRequest) => {
+          req.log.warn(
+            { route: routeName, key: subjectOf(req) ? "subject" : "ip" },
+            "rate limit exceeded",
+          );
+        },
+      },
+    },
+  };
+}
+
+export function buildServer(
+  deps: {
+    store?: AuthStore;
+    fetchImpl?: typeof fetch;
+    /** Injectable for tests: stands in for the SSRF guard's DNS lookup. */
+    lookup?: (host: string) => Promise<string[]>;
+  } = {},
+) {
   const config = assertHttpConfig(rawConfig);
   const authSettings = loadAuthSettings(process.env, config.SEERRSENSE_AUTH_TOKEN);
   if (!authSettings.oauth && !authSettings.legacyToken) {
@@ -87,8 +171,37 @@ export function buildServer(deps: { store?: AuthStore; fetchImpl?: typeof fetch 
       "the HTTP server has no way to authenticate: configure OAuth or leave SEERRSENSE_AUTH_TOKEN enabled",
     );
   }
-  // We use createMcpFastifyApp for host/dns rebinding protection as recommended
-  const fastify = createMcpFastifyApp({ host: "0.0.0.0" });
+  // createMcpFastifyApp does not forward Fastify constructor options (only
+  // host/allowedHosts/allowedOrigins, used to decide whether to add DNS
+  // rebinding hooks) — confirmed by reading its source rather than assuming
+  // it. At host "0.0.0.0" it adds no rebinding hook either way, only a log
+  // warning, so building Fastify directly here for host "0.0.0.0" carries no
+  // loss of the protection createMcpFastifyApp would have applied.
+  const fastify = Fastify({
+    trustProxy: true,
+    logger: {
+      level: process.env.LOG_LEVEL ?? "info",
+      redact: {
+        paths: [
+          "req.headers.authorization",
+          "req.headers.cookie",
+          "req.headers['x-api-key']",
+          "*.apiKey",
+          "*.seerrApiKeySealed",
+          "*.cfAccessClientSecret",
+        ],
+        remove: true,
+      },
+    },
+  });
+
+  // global: false means every route opts in individually via
+  // `config.rateLimit`; hook: "preHandler" so the subject the global auth
+  // preHandler resolves below is already on request.raw by the time a
+  // route's own key generator runs. Health probes and /assets/* are simply
+  // never given a rateLimit config, so they stay unlimited.
+  fastify.register(rateLimit, { global: false, hook: "preHandler" });
+  const limits = rateLimitSettings();
 
   const authStore: AuthStore | undefined = authSettings.oauth
     ? (deps.store ?? (authSettings.oauth.databaseUrl
@@ -96,38 +209,24 @@ export function buildServer(deps: { store?: AuthStore; fetchImpl?: typeof fetch 
         : new MemoryAuthStore()))
     : undefined;
 
-  if (authSettings.oauth && authStore) {
-    const oauth = authSettings.oauth;
-    fastify.register(fastifyCookie);
-    registerOAuthRoutes(fastify, oauth, authStore, { fetchImpl: deps.fetchImpl });
-    // Expired rows are ignored on read, but nothing deletes them, so a
-    // long-lived database would grow without bound. unref so the sweep never
-    // holds the process open.
-    let purgeTimer: NodeJS.Timeout | undefined;
-    fastify.addHook("onReady", async () => {
-      await authStore.init();
-      await authStore.purgeExpired();
-      purgeTimer = setInterval(() => {
-        authStore.purgeExpired().catch((error) => fastify.log.warn({ err: error }, "OAuth purge failed"));
-      }, 60 * 60 * 1000);
-      purgeTimer.unref();
-    });
-    fastify.addHook("onClose", async () => {
-      if (purgeTimer) clearInterval(purgeTimer);
-      await authStore.close();
-    });
-  }
-
   const tenants = new TenantResolver(
     authStore,
     authSettings.oauth?.encryptionKey,
     createDefaultSeerrClient(),
+    authSettings.oauth?.householdEmails,
+    60_000,
+    deps.lookup,
   );
 
   /** The Seerr resolved for this request, attached by the auth hook. */
   const tenantOf = (request: { raw: unknown }): Tenant | undefined =>
     (request.raw as { tenant?: Tenant }).tenant;
 
+  // Registered on the root instance (not inside the nested plugin below) on
+  // purpose: Fastify's default not-found handler runs through whichever
+  // onRequest/preHandler hooks are present at the ROOT level at boot time, so
+  // an undeclared path still meets this gate and answers 401 rather than
+  // leaking a 404 that would tell an unauthenticated caller a route exists.
   fastify.addHook("preHandler", async (request, reply) => {
     if (isPublic(request.url) || isSessionRoute(request.url)) return;
 
@@ -162,6 +261,44 @@ export function buildServer(deps: { store?: AuthStore; fetchImpl?: typeof fetch 
     // subject, so the MCP hot path keeps its "no database read" property.
     (request.raw as { tenant?: Tenant }).tenant = await tenants.resolve(auth);
   });
+
+  // Fastify only wires a plugin's `onRoute` hook (which is how
+  // `config.rateLimit` gets attached below) into routes registered *after*
+  // that plugin has finished loading — `register()` defers execution to the
+  // boot sequence, while a bare `fastify.get(...)` call adds the route
+  // immediately. Every route is therefore registered inside this nested
+  // plugin, which avvio boots strictly after the rate-limit plugin above
+  // rather than at the top level; hooks added on the root instance (the auth
+  // gate above) still apply to routes registered in here.
+  fastify.register(async (fastify) => {
+  if (authSettings.oauth && authStore) {
+    const oauth = authSettings.oauth;
+    fastify.register(fastifyCookie);
+    registerOAuthRoutes(fastify, oauth, authStore, { fetchImpl: deps.fetchImpl, rateLimit: limits.oauth });
+    // Expired rows are ignored on read, but nothing deletes them, so a
+    // long-lived database would grow without bound. unref so the sweep never
+    // holds the process open.
+    let purgeTimer: NodeJS.Timeout | undefined;
+    const RESOLVE_USAGE_RETENTION_DAYS = 7;
+    const purgeResolveUsageBefore = () =>
+      new Date(Date.now() - RESOLVE_USAGE_RETENTION_DAYS * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
+    fastify.addHook("onReady", async () => {
+      await authStore.init();
+      await authStore.purgeExpired();
+      await authStore.purgeResolveUsage(purgeResolveUsageBefore());
+      purgeTimer = setInterval(() => {
+        authStore.purgeExpired().catch((error) => fastify.log.warn({ err: error }, "OAuth purge failed"));
+        authStore
+          .purgeResolveUsage(purgeResolveUsageBefore())
+          .catch((error) => fastify.log.warn({ err: error }, "resolve usage purge failed"));
+      }, 60 * 60 * 1000);
+      purgeTimer.unref();
+    });
+    fastify.addHook("onClose", async () => {
+      if (purgeTimer) clearInterval(purgeTimer);
+      await authStore.close();
+    });
+  }
 
   // The landing page: three explicit routes plus one prefixed asset directory.
   // The first registration passes `serve: false`, so it adds no routes and only
@@ -226,7 +363,10 @@ export function buildServer(deps: { store?: AuthStore; fetchImpl?: typeof fetch 
 
   if (authSettings.oauth && authStore) {
     const oauth = authSettings.oauth;
-    registerAccountRoutes(fastify, oauth, authStore, tenants);
+    registerAccountRoutes(fastify, oauth, authStore, tenants, {
+      lookup: deps.lookup,
+      rateLimit: limits.connection,
+    });
 
     // The page finishes its own PKCE exchange here rather than in JavaScript:
     // the browser gets a session cookie scoped to the account API, and no MCP
@@ -246,7 +386,7 @@ export function buildServer(deps: { store?: AuthStore; fetchImpl?: typeof fetch 
         .sendFile("account-callback.html", { cacheControl: false });
     });
 
-    fastify.post("/account/session", async (request, reply) => {
+    fastify.post("/account/session", ipRateLimited(limits.oauth, "/account/session"), async (request, reply) => {
       const body = (request.body ?? {}) as { code?: string; codeVerifier?: string };
       if (!body.code || !body.codeVerifier) {
         return reply.status(400).send({ error: "code and codeVerifier are required" });
@@ -282,7 +422,7 @@ export function buildServer(deps: { store?: AuthStore; fetchImpl?: typeof fetch 
     });
   }
 
-  fastify.get("/api/v1/search", async (request, reply) => {
+  fastify.get("/api/v1/search", subjectRateLimited(limits.subject, "/api/v1/search"), async (request, reply) => {
     const q = SearchQuerySchema.safeParse(request.query);
     if (!q.success) {
       return reply.status(400).send({ error: "Missing or invalid query parameter" });
@@ -294,35 +434,43 @@ export function buildServer(deps: { store?: AuthStore; fetchImpl?: typeof fetch 
     return tenant.client.search(q.data.query);
   });
 
-  fastify.get("/api/v1/media/:mediaType/:tmdbId", async (request, reply) => {
-    const params = MediaParamsSchema.safeParse(request.params);
-    if (!params.success) {
-      return reply.status(400).send({ error: params.error.issues });
-    }
-    const tenant = tenantOf(request);
-    if (!tenant?.client) {
-      return reply.status(409).send({ error: notConnectedMessage(config.SEERRSENSE_PUBLIC_URL) });
-    }
-    return tenant.client.getMedia(params.data.mediaType, params.data.tmdbId);
-  });
+  fastify.get(
+    "/api/v1/media/:mediaType/:tmdbId",
+    subjectRateLimited(limits.subject, "/api/v1/media"),
+    async (request, reply) => {
+      const params = MediaParamsSchema.safeParse(request.params);
+      if (!params.success) {
+        return reply.status(400).send({ error: params.error.issues });
+      }
+      const tenant = tenantOf(request);
+      if (!tenant?.client) {
+        return reply.status(409).send({ error: notConnectedMessage(config.SEERRSENSE_PUBLIC_URL) });
+      }
+      return tenant.client.getMedia(params.data.mediaType, params.data.tmdbId);
+    },
+  );
 
-  fastify.post("/api/v1/request", async (request, reply) => {
-    const body = RequestBodySchema.safeParse(request.body);
-    if (!body.success) {
-      return reply.status(400).send({ error: body.error.issues });
-    }
-    const tenant = tenantOf(request);
-    if (!tenant?.client) {
-      return reply.status(409).send({ error: notConnectedMessage(config.SEERRSENSE_PUBLIC_URL) });
-    }
-    try {
-       const service = new MediaRequestService(tenant.client, tenant.attributedUserId);
-       const result = await service.requestMediaSafely(body.data);
-       return result;
-    } catch (err: any) {
-       return reply.status(400).send({ error: err.message });
-    }
-  });
+  fastify.post(
+    "/api/v1/request",
+    subjectRateLimited(limits.subject, "/api/v1/request"),
+    async (request, reply) => {
+      const body = RequestBodySchema.safeParse(request.body);
+      if (!body.success) {
+        return reply.status(400).send({ error: body.error.issues });
+      }
+      const tenant = tenantOf(request);
+      if (!tenant?.client) {
+        return reply.status(409).send({ error: notConnectedMessage(config.SEERRSENSE_PUBLIC_URL) });
+      }
+      try {
+        const service = new MediaRequestService(tenant.client, tenant.attributedUserId);
+        const result = await service.requestMediaSafely(body.data);
+        return result;
+      } catch (err: any) {
+        return reply.status(400).send({ error: err.message });
+      }
+    },
+  );
 
   // MCP v2 Protocol 2026-07-28 compliant Streamable HTTP endpoint
   // The factory runs per request and resolves the tenant from the same
@@ -332,34 +480,50 @@ export function buildServer(deps: { store?: AuthStore; fetchImpl?: typeof fetch 
   // hung off request.raw is simply not there and every caller would silently
   // look unconnected. Resolution is cached per subject, so this costs no extra
   // database read on the hot path.
-  const handler = createMcpHandler(async (ctx) =>
-    createSeerrSenseMcpServer(ctx.authInfo?.scopes, await tenants.resolve(ctx.authInfo)),
-  );
+  const resolveBudget = resolveBudgetSettings();
+
+  const handler = createMcpHandler(async (ctx) => {
+    const tenant = await tenants.resolve(ctx.authInfo);
+    const budget = authStore ? { store: authStore, options: resolveBudget } : undefined;
+    return createSeerrSenseMcpServer(ctx.authInfo?.scopes, tenant, budget);
+  });
   const nodeHandler = toNodeHandler(handler);
 
-  fastify.all("/mcp", async (request, reply) => {
+  fastify.all("/mcp", subjectRateLimited(limits.subject, "/mcp"), async (request, reply) => {
     await nodeHandler(request.raw, reply.raw, request.body);
   });
 
-  const intentExtractor = config.NEBIUS_API_KEY ? new NebiusIntentExtractor() : undefined;
+  fastify.get(
+    "/api/v1/resolve",
+    subjectRateLimited(limits.subject, "/api/v1/resolve"),
+    async (request, reply) => {
+      const q = SearchQuerySchema.safeParse(request.query);
+      if (!q.success) {
+        return reply.status(400).send({ error: "Missing or invalid query parameter" });
+      }
 
-  fastify.get("/api/v1/resolve", async (request, reply) => {
-    const q = SearchQuerySchema.safeParse(request.query);
-    if (!q.success) {
-      return reply.status(400).send({ error: "Missing or invalid query parameter" });
-    }
-    
-    const tenant = tenantOf(request);
-    if (!tenant?.client) {
-      return reply.status(409).send({ error: notConnectedMessage(config.SEERRSENSE_PUBLIC_URL) });
-    }
-    try {
-      const mediaResolver = new MediaResolver(tenant.client, intentExtractor);
-      const result = await mediaResolver.resolveMedia(q.data.query);
-      return reply.send(result);
-    } catch (e: any) {
-      return reply.status(500).send({ error: e.message });
-    }
+      const tenant = tenantOf(request);
+      if (!tenant?.client) {
+        return reply.status(409).send({ error: notConnectedMessage(config.SEERRSENSE_PUBLIC_URL) });
+      }
+      try {
+        let intentExtractor: IntentExtractor | undefined = config.NEBIUS_API_KEY
+          ? new NebiusIntentExtractor()
+          : undefined;
+        if (intentExtractor && authStore) {
+          intentExtractor = new BudgetedIntentExtractor(intentExtractor, authStore, tenant.subject, resolveBudget);
+        }
+        const mediaResolver = new MediaResolver(tenant.client, intentExtractor);
+        const result = await mediaResolver.resolveMedia(q.data.query);
+        return reply.send(result);
+      } catch (e: any) {
+        if (e instanceof ResolveBudgetError) {
+          return reply.status(429).send({ error: e.message });
+        }
+        return reply.status(500).send({ error: e.message });
+      }
+    },
+  );
   });
 
   return fastify;
