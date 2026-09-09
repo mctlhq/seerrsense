@@ -1,5 +1,18 @@
 # Changelog
 
+## [1.6.0](https://github.com/mctlhq/seerrsense/compare/1.5.0...1.6.0) (2026-09-09)
+
+
+### Features
+
+* **agents:** issue-39-consent-cloudflare-email-obfuscation-rep ([7c1a8f0](https://github.com/mctlhq/seerrsense/commit/7c1a8f0dd2ee9a42db2f41e7d2eaddd2a9884cf1))
+
+
+### Bug Fixes
+
+* **consent:** keep signed-in address readable under email obfuscation ([cd40425](https://github.com/mctlhq/seerrsense/commit/cd404251d3fea2818d296b214246ca8ca475e3f0))
+* drop an accidentally committed node_modules symlink ([bd2c969](https://github.com/mctlhq/seerrsense/commit/bd2c9694187a63d643e2e3b786b6ea32417f03c6))
+
 ## [1.5.0](https://github.com/mctlhq/seerrsense/compare/1.4.5...1.5.0) (2026-09-09)
 
 
