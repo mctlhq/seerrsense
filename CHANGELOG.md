@@ -1,5 +1,21 @@
 # Changelog
 
+## [1.3.0](https://github.com/mctlhq/seerrsense/compare/1.2.0...1.3.0) (2026-09-09)
+
+
+### Features
+
+* **account:** a page for attaching your own Seerr ([081dd81](https://github.com/mctlhq/seerrsense/commit/081dd81dceebf36f58d8e137c4c0e1d1222d718f))
+* **account:** a page for attaching your own Seerr ([823c629](https://github.com/mctlhq/seerrsense/commit/823c629235eb28e62012ca31ceeeb73c71e027e5)), closes [#3](https://github.com/mctlhq/seerrsense/issues/3)
+* **tenancy:** let each person use their own Seerr ([4e4b7fe](https://github.com/mctlhq/seerrsense/commit/4e4b7fe07518f8565b95ac54a044c66c1ca33f4c))
+* **tenancy:** let each person use their own Seerr ([fa5d4e1](https://github.com/mctlhq/seerrsense/commit/fa5d4e170d5c770603a75fd9280d59476175f356)), closes [#3](https://github.com/mctlhq/seerrsense/issues/3)
+
+
+### Bug Fixes
+
+* **auth:** meet what the OpenAI and Anthropic connectors actually require ([2a61564](https://github.com/mctlhq/seerrsense/commit/2a615642abe2e6022a7aec6cc5251769ad493e32))
+* **auth:** meet what the OpenAI and Anthropic connectors actually require ([e89e9f7](https://github.com/mctlhq/seerrsense/commit/e89e9f7c979619e7d083f635750d7f162ccc7082))
+
 ## [1.2.0](https://github.com/mctlhq/seerrsense/compare/1.1.0...1.2.0) (2026-09-08)
 
 
