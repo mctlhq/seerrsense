@@ -1,5 +1,13 @@
 # Changelog
 
+## [1.4.2](https://github.com/mctlhq/seerrsense/compare/1.4.1...1.4.2) (2026-09-09)
+
+
+### Bug Fixes
+
+* let the model name the film it recognises ([b112dc9](https://github.com/mctlhq/seerrsense/commit/b112dc9d3221ba559f9ae010996611ca19bd0f17))
+* let the model name the film it recognises ([18ac2c6](https://github.com/mctlhq/seerrsense/commit/18ac2c651fce04db98e3f00057776550dd0ad2a7)), closes [#27](https://github.com/mctlhq/seerrsense/issues/27)
+
 ## [1.4.1](https://github.com/mctlhq/seerrsense/compare/1.4.0...1.4.1) (2026-09-09)
 
 
