@@ -209,6 +209,11 @@ describe("the account page", () => {
     });
     expect(api.statusCode).toBe(200);
     expect(api.headers["content-type"]).toContain("application/json");
+    // Asserting the body carries the address, not just that the response is
+    // JSON: dropping `email` from the payload would leave the checks around
+    // this one green — more comfortably, since the address is then nowhere at
+    // all — while the page renders "Signed in as undefined".
+    expect(JSON.parse(api.payload)).toMatchObject({ email: ALLOWED_EMAIL });
 
     const page = await app.inject({ method: "GET", url: "/account", headers: { cookie } });
     expect(page.statusCode).toBe(200);

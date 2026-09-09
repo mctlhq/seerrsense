@@ -678,6 +678,21 @@ describe("consent", () => {
       "",
     );
     expect(withoutMarkedRegions).not.toContain(ALLOWED_EMAIL);
+
+    // The markers are only load-bearing while the decoder cannot run, and the
+    // comment above them in src/auth/routes.ts says so: no script-src, so
+    // default-src 'none' governs script. Nothing checked that. Adding
+    // script-src to this header would leave every assertion above green — the
+    // markers still there, exactly once, still around the address — while the
+    // one screen that guards authorization silently gained the ability to
+    // execute script injected between the origin and the browser. Compared as
+    // whole directives for the reason the style-src case above gives.
+    const csp = String(consent.headers["content-security-policy"])
+      .split(";")
+      .map((directive) => directive.trim());
+    expect(csp).toContain("default-src 'none'");
+    expect(csp.some((directive) => directive.startsWith("script-src"))).toBe(false);
+    expect(consent.payload).not.toMatch(/<script[\s>]/);
     await app.close();
   });
 

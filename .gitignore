@@ -1,2 +1,5 @@
 node_modules/
+# Without this line the directory-only pattern above misses a *symlink*
+# named node_modules, which is how one reached a PR (#43).
+node_modules
 dist/
