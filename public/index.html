@@ -76,66 +76,6 @@
   </div>
 </section>
 
-<section class="wrap">
-  <div class="section-head">
-    <h2>What it adds to the Seerr stack</h2>
-    <p>Seerr already knows your library and talks to Radarr and Sonarr. What it does not do is
-      take a vague sentence and turn it into the right TMDB id.</p>
-  </div>
-  <div class="card-grid">
-    <article class="card">
-      <svg class="card-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg>
-      <h3>Resolution, not just search</h3>
-      <p>“That submarine film with the German crew” goes through Seerr’s own search first, then a
-        normalised retry, and only then a language model that proposes titles, people and years —
-        never an id. Every candidate is verified against Seerr before it is offered.</p>
-    </article>
-    <article class="card">
-      <svg class="card-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M12 3v18M5 8l7-5 7 5"/></svg>
-      <h3>Your server, your rules</h3>
-      <p>Requests are filed through your Seerr instance with your API key, so quotas, approvals
-        and the existing request history keep working exactly as before.</p>
-    </article>
-    <article class="card">
-      <svg class="card-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><rect x="3" y="11" width="18" height="10" rx="2"/><path d="M8 11V7a4 4 0 0 1 8 0v4"/></svg>
-      <h3>Writes are guarded</h3>
-      <p>Before anything is requested, SeerrSense re-reads the canonical record and refuses when the
-        title is already available or pending. The write tool needs its own scope.</p>
-    </article>
-  </div>
-</section>
-
-<section class="wrap">
-  <div class="section-head">
-    <h2>How a request travels</h2>
-    <p>SeerrSense holds no library of its own. It resolves, then hands the work to the stack you
-      already run.</p>
-  </div>
-  <div class="flow-scroll">
-    <div class="flow">
-      <div class="flow-node">
-        <div class="node-name">AI client</div>
-        <p class="node-label">Claude, ChatGPT or any MCP client</p>
-      </div>
-      <div class="flow-arrow" aria-hidden="true">→</div>
-      <div class="flow-node is-self">
-        <div class="node-name">SeerrSense</div>
-        <p class="node-label">Resolves the title, checks the status, guards the write</p>
-      </div>
-      <div class="flow-arrow" aria-hidden="true">→</div>
-      <div class="flow-node">
-        <div class="node-name">Seerr</div>
-        <p class="node-label">Overseerr or Jellyseerr: quotas, approvals, history</p>
-      </div>
-      <div class="flow-arrow" aria-hidden="true">→</div>
-      <div class="flow-node">
-        <div class="node-name">Radarr / Sonarr</div>
-        <p class="node-label">Downloads, as they always did</p>
-      </div>
-    </div>
-  </div>
-</section>
-
 <section class="wrap" id="tools">
   <div class="section-head">
     <h2>MCP tools</h2>
@@ -173,52 +113,31 @@
   </div>
 </section>
 
-<section class="wrap">
-  <div class="section-head">
-    <h2>Connecting to Seerr</h2>
-    <p>One instance, one API key, read through the same endpoints the web interface uses.</p>
-  </div>
-  <div class="card-grid">
-    <article class="card">
-      <h3>Your own instance</h3>
-      <p>Sign in on the <a href="/account">account page</a> and attach your own Overseerr or
-        Jellyseerr. The key is encrypted before it is stored and never leaves this server.</p>
-    </article>
-    <article class="card">
-      <h3>Behind Cloudflare Zero Trust</h3>
-      <p>Set <code>CF_ACCESS_CLIENT_ID</code> and <code>CF_ACCESS_CLIENT_SECRET</code> and the
-        service-token headers travel with every call to Seerr.</p>
-    </article>
-    <article class="card">
-      <h3>Optional semantic layer</h3>
-      <p>With <code>NEBIUS_API_KEY</code> set, unresolved phrasings go through a language model that
-        proposes titles for verification. Without it, search still works.</p>
-    </article>
-  </div>
-</section>
-
 <section class="wrap" id="setup">
   <div class="section-head">
     <h2>Set it up</h2>
-    <p>Use the hosted endpoint, or run it yourself next to your Seerr.</p>
+    <p>Three steps, in order.</p>
   </div>
+  <!-- Menu paths for claude.ai and ChatGPT verified against vendor documentation
+       on 2026-09-09; both products change their settings layout without notice,
+       so treat this as approximate if it has been a while. -->
   <ol class="steps">
-    <li><strong>Add the MCP server.</strong> Point your client at the endpoint above and give it the
-      bearer token you were issued.
-      <pre><code>{
-  "seerrsense": {
-    "serverUrl": "<span class="mcp-url-slot">https://seerrsense.mctl.ai/mcp</span>",
-    "headers": { "Authorization": "Bearer &lt;your token&gt;" }
-  }
-}</code></pre>
+    <li><strong>Add the connector.</strong> Paste this endpoint into your assistant:
+      <code class="mcp-url-slot">https://seerrsense.mctl.ai/mcp</code>
+      <br>In claude.ai: <em>Customize → Connectors → “+” → Add custom connector</em>, paste the URL,
+      then <em>Add</em>.
+      <br>In ChatGPT: <em>Settings → Security and login → Developer mode</em>, then
+      <em>Plugins → “+”</em>, and create an app with the URL.
     </li>
-    <li><strong>Or run it locally.</strong> Standalone binaries for Linux, macOS and Windows are
-      attached to every <a href="https://github.com/mctlhq/seerrsense/releases">release</a>, and the
-      server speaks stdio for clients that prefer to own the process.
-      <pre><code>seerrsense stdio</code></pre>
+    <li><strong>Sign in with Google.</strong> Happens automatically on the first <em>Connect</em>. One
+      consent screen names the client and what it is being granted. There is nothing to copy anywhere.
     </li>
-    <li><strong>Ask for something.</strong> “Find that heist film Michael Mann made in the nineties
-      and request it.”</li>
+    <li><strong>Attach your Seerr.</strong> Open <a href="/account">/account</a> and enter your
+      Overseerr or Jellyseerr address and its API key (<em>Settings, then General, then API Key</em>).
+      If that Seerr sits behind Cloudflare Access, two more fields appear for the service token. The
+      page tests the credentials against your instance before saving them. Skipping this step is
+      fine for now: the tools will say so and point you back at <a href="/account">/account</a>.
+    </li>
   </ol>
 </section>
 
@@ -239,22 +158,10 @@
         request for something already available or pending.</p>
     </details>
     <details class="faq-item">
-      <summary>How is access controlled?</summary>
-      <p>The MCP endpoint requires a bearer token. The server can also act as its own OAuth 2.1
-        authorization server with Google as the identity provider, in which case each person signs
-        in with their own account, tokens are short-lived and can be revoked individually, and
-        access is limited to an explicit list of addresses.</p>
-    </details>
-    <details class="faq-item">
       <summary>Does a language model see my library?</summary>
       <p>Only the phrase you typed is sent, and only when the ordinary search paths fail. The model
         proposes titles, people and years; it never returns provider ids, and every candidate is
         verified against Seerr before you see it.</p>
-    </details>
-    <details class="faq-item">
-      <summary>Can I self-host it?</summary>
-      <p>Yes. It is a single container, or a standalone binary, with three required settings. See
-        the repository for the full list.</p>
     </details>
   </div>
 </section>
@@ -264,7 +171,7 @@
 <footer class="wrap">
   <div class="footer-row">
     <span>SeerrSense — part of the <a href="https://mctl.ai">mctl</a> platform.</span>
-    <span><a href="/privacy">Privacy</a> · <a href="/terms">Terms</a> · <a href="https://github.com/mctlhq/seerrsense">Source</a></span>
+    <span><a href="/privacy">Privacy</a> · <a href="/terms">Terms</a> · <a href="https://github.com/mctlhq/seerrsense">Source</a> · <a href="https://github.com/mctlhq/seerrsense#readme">Self-host it</a></span>
   </div>
 </footer>
 

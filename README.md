@@ -84,7 +84,40 @@ Current focus:
 * MCP integration
 
 ## Quick Start
-*TBD*
+
+Minimum settings for any of the three ways to run it: `SEERR_URL` (defaults to
+`http://127.0.0.1:5055`), `SEERR_API_KEY` for the household Overseerr/Jellyseerr, and
+`SEERRSENSE_AUTH_TOKEN`, which `assertHttpConfig` requires only when the HTTP server
+is started — stdio mode has no network surface and does not need it.
+
+**Container.** The published image is built from the `Dockerfile` (`node:22-slim`),
+listens on port `8787` and answers `/healthz` for the container healthcheck:
+
+```sh
+docker run -p 8787:8787 \
+  -e SEERR_URL=https://media.example.com \
+  -e SEERR_API_KEY=... \
+  -e SEERRSENSE_AUTH_TOKEN=... \
+  ghcr.io/mctlhq/seerrsense:<tag>
+```
+
+(`<tag>` is a released version; see [Deployment](#deployment) for how images are
+built and tagged.)
+
+**Standalone binary.** Every tagged release attaches four bun-compiled executables
+(`.github/workflows/release-binaries.yml`): `seerrsense-linux-x64`,
+`seerrsense-windows-x64.exe`, `seerrsense-darwin-x64` and `seerrsense-darwin-arm64`.
+They are built primarily for `seerrsense stdio` below; whether a given release also
+serves the HTTP landing page depends on `public/` being present next to the binary,
+which is not verified here — for HTTP mode, the container image is the documented
+path.
+
+**stdio.** For clients that own the process directly (Claude Desktop and similar),
+run the server on stdio instead of opening a port:
+
+```sh
+seerrsense stdio
+```
 
 ## Configuration
 
@@ -97,6 +130,19 @@ Current focus:
 | `PORT` | no | default `8787` |
 | `NEBIUS_API_KEY`, `NEBIUS_MODEL` | no | enable the semantic resolver |
 | `CF_ACCESS_CLIENT_ID`, `CF_ACCESS_CLIENT_SECRET` | no | reach a Seerr behind Cloudflare Zero Trust |
+
+### Cloudflare Access and the semantic layer
+
+`CF_ACCESS_CLIENT_ID` and `CF_ACCESS_CLIENT_SECRET` add the Cloudflare Access
+service-token headers to every call the *household* Seerr client makes. A
+signed-in person does not set these: the same two values are two fields on
+`/account`, sealed per user and applied only to their own attached instance.
+
+`NEBIUS_API_KEY` (with the optional `NEBIUS_MODEL`) turns on the semantic
+resolver: when Seerr's native search and a normalised retry both come up
+empty, unresolved phrasings go through a language model that proposes
+candidate titles for verification against Seerr. Without it, search still
+works, just without the fallback.
 
 ### OAuth (optional)
 
@@ -119,7 +165,30 @@ Setting some but not all is refused at startup.
 | `SEERRSENSE_ENCRYPTION_KEY` | 32 bytes, hex or base64, sealing the Seerr API keys people attach. Without it nobody can attach one |
 
 ## MCP
-*TBD*
+
+The MCP endpoint is `/mcp`, a Streamable HTTP transport speaking the 2026-07-28
+protocol revision. It exposes four tools — `search_media`, `resolve_media`,
+`get_media` and `request_media`, the last being the only one that writes — under
+three scopes: `seerr:read`, `seerr:request` and `offline_access`. See
+[Security Model](#security-model) for how a token earns those scopes and what
+each one gates.
+
+A client discovers the authorization server the standard way: an
+unauthenticated request to `/mcp` is refused with a `WWW-Authenticate` header
+pointing at the RFC 9728 protected-resource document. Four `.well-known`
+documents are served: `/.well-known/oauth-authorization-server`,
+`/.well-known/oauth-authorization-server/mcp`,
+`/.well-known/oauth-protected-resource` and
+`/.well-known/oauth-protected-resource/mcp`.
+
+Clients register through **Client ID Metadata Documents**: `client_id` is an
+https URL with a path, naming a JSON document that lists the client's
+`client_name` and allowed `redirect_uris`. Dynamic Client Registration is
+deprecated in MCP 2026-07-28 and is not implemented. A client that cannot
+publish a CIMD can instead be given a **pre-registered** entry via
+`SEERRSENSE_OAUTH_CLIENTS`, formatted as
+`client_id=redirect_uri[,redirect_uri...];...` (semicolon-separated entries,
+comma-separated redirect URIs within one entry).
 
 ## Whose Seerr
 
@@ -183,10 +252,39 @@ The MCP endpoint shown on the page is derived from `window.location.origin`, so
 promoting a domain needs no change here.
 
 ## REST API
-*TBD*
+
+The same four operations are available over REST at `/api/v1`, gated by the
+same bearer token as `/mcp`:
+
+* `GET /api/v1/search` — query the tenant's Seerr.
+* `GET /api/v1/media/:mediaType/:tmdbId` — canonical record for one TMDB id.
+* `POST /api/v1/request` — file a request, guarded the same way `request_media` is.
+* `GET /api/v1/resolve` — natural-language resolution, going through the semantic
+  layer when it is configured.
+
+`/api/v1/account/connection` has its own `GET`, `PUT` and `DELETE` methods for
+reading, saving and removing a person's attached Seerr, but — as already noted
+above — it authenticates with the browser session cookie set at `/account`, not
+with an MCP access token: an assistant holding a token must not be able to read
+or rewrite which Seerr it talks to.
 
 ## Architecture
-*TBD*
+
+* `src/api` — the Fastify HTTP server: `/mcp`, `/api/v1/*`, `/account/*`, the
+  static landing/account pages, and the health probes.
+* `src/auth` — the optional OAuth 2.1 authorization server (config, routes,
+  client resolution, token verification) and the legacy shared-token check.
+* `src/core` — environment config and shared schemas.
+* `src/mcp` — the MCP server factory and its four tools.
+* `src/providers/seerr` — the Seerr HTTP client and `TenantResolver`.
+
+`TenantResolver` decides which Seerr a request reaches, in order: the instance
+that signed-in person attached themselves; otherwise the household instance
+from `SEERR_URL`/`SEERR_API_KEY`; otherwise none, in which case the tools and
+REST endpoints say so and point at `/account`. A resolution is cached for one
+minute per subject so the MCP hot path costs no extra database read; saving or
+deleting a connection calls `forget()` on that person's cache entry so the
+change is not stuck behind the cache window.
 
 ## Security Model
 
@@ -231,10 +329,32 @@ authorization server.
   `SEERRSENSE_LEGACY_TOKEN_ENABLED=false`.
 
 ## Development
-*TBD*
+
+`package.json` scripts:
+
+| Script | What it does |
+|---|---|
+| `npm run dev` | run the server with `tsx`, no build step |
+| `npm run build` | compile to `dist/` with `tsc` |
+| `npm run typecheck` | `tsc --noEmit` |
+| `npm test` | run the vitest suite |
+| `npm run sync:tokens` | regenerate `public/assets/tokens.css` from the pinned `https://ui.mctl.ai/0.5.0/mctl.css` |
+| `npm run check:tokens` | verify the committed tokens file still matches that source (CI gate) |
+
+CI (`.github/workflows/ci.yml`) runs, in order: `check:tokens`, `typecheck`,
+`test`, then a `docker build` of the image with no push. The test step runs
+against a `postgres:16-alpine` service container via `TEST_DATABASE_URL`, so
+`PostgresAuthStore` — which carries every authorization code and refresh token
+in production — is exercised for real, not only through the in-memory store.
 
 ## Deployment
-*TBD*
 
-## Roadmap
-*TBD*
+The version is managed by [release-please](.github/workflows/release-please.yml),
+which opens and merges the release PR and tags the resulting commit. Once a
+release is created, that workflow hands the new tag to the platform's
+`mctl-gitops` repository, which builds `ghcr.io/mctlhq/seerrsense` from this
+repo's `Dockerfile` and updates the deployed image tag for ArgoCD to sync.
+Tag pushes also trigger `release-binaries.yml`, which builds and attaches the
+four standalone executables described in [Quick Start](#quick-start) to that
+tag's GitHub release. `ci.yml`'s own `docker build` step never pushes; it only
+proves the image still builds on every PR.
