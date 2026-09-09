@@ -9,6 +9,22 @@ on:
 jobs:
   validate:
     runs-on: ubuntu-latest
+    # PostgresAuthStore carries every authorization code and refresh token in
+    # production, and its queries are only exercised when TEST_DATABASE_URL
+    # points at a real server. Without this the suite still passes — against
+    # the in-memory store alone, which is not what production runs.
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_PASSWORD: test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -34,6 +50,10 @@ jobs:
         
       - name: Test
         run: npm test
+        env:
+          # sslmode=disable: the service container serves plaintext, while the
+          # store defaults to TLS for the platform database that does not.
+          TEST_DATABASE_URL: postgresql://postgres:test@127.0.0.1:5432/postgres?sslmode=disable
 
       - name: Docker Build (No Push)
         run: docker build -t seerrsense:test .
