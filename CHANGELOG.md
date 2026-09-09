@@ -1,5 +1,13 @@
 # Changelog
 
+## [1.4.4](https://github.com/mctlhq/seerrsense/compare/1.4.3...1.4.4) (2026-09-09)
+
+
+### Bug Fixes
+
+* bound the intent model call so a rambling answer cannot hang a request ([83b1538](https://github.com/mctlhq/seerrsense/commit/83b15386a8cc699c83e6939f04e01fe0ffa4a12d))
+* bound the intent model call so a rambling answer cannot hang a request ([b759f15](https://github.com/mctlhq/seerrsense/commit/b759f15f3ea3adc1fd479eeb98cfcd348e4459f8))
+
 ## [1.4.3](https://github.com/mctlhq/seerrsense/compare/1.4.2...1.4.3) (2026-09-09)
 
 
