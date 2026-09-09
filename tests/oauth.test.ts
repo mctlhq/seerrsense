@@ -631,6 +631,56 @@ describe("consent", () => {
     await app.close();
   });
 
+  it("wraps the signed-in address in email_off markers, exactly once", async () => {
+    // Cloudflare's Email Address Obfuscation rewrites any bare address in the
+    // HTML body into a placeholder, and this response's CSP has no script-src
+    // to run the decoder that would normally restore it. The email_off
+    // comment markers are the origin-side opt-out; if they were ever removed
+    // the address would render as [email protected] in production even though
+    // this test's ALLOWED_EMAIL check below would keep passing on its own.
+    const app = await makeApp();
+    const authorize = await app.inject({
+      method: "GET",
+      url: "/oauth/authorize",
+      query: {
+        client_id: CLIENT_ID,
+        redirect_uri: REDIRECT_URI,
+        response_type: "code",
+        code_challenge: challengeFor(makeVerifier()),
+        code_challenge_method: "S256",
+        scope: "seerr:read",
+      },
+    });
+    const googleUrl = new URL(authorize.headers.location as string);
+    lastGoogleNonce = googleUrl.searchParams.get("nonce") ?? undefined;
+    const consent = await app.inject({
+      method: "GET",
+      url: "/oauth/google/callback",
+      query: { code: "google-code", state: googleUrl.searchParams.get("state")! },
+    });
+    expect(consent.statusCode).toBe(200);
+
+    const openMarkers = consent.payload.match(/<!--email_off-->/g) ?? [];
+    const closeMarkers = consent.payload.match(/<!--\/email_off-->/g) ?? [];
+    expect(openMarkers).toHaveLength(1);
+    expect(closeMarkers).toHaveLength(1);
+
+    const regions = [...consent.payload.matchAll(/<!--email_off-->([\s\S]*?)<!--\/email_off-->/g)].map(
+      (match) => match[1],
+    );
+    expect(regions.some((region) => region.includes(ALLOWED_EMAIL))).toBe(true);
+
+    // Stripping the marked region must remove the address entirely — the
+    // pre-existing toContain(ALLOWED_EMAIL) check above would still pass even
+    // if the markers were deleted, so it alone cannot catch that regression.
+    const withoutMarkedRegions = consent.payload.replace(
+      /<!--email_off-->[\s\S]*?<!--\/email_off-->/g,
+      "",
+    );
+    expect(withoutMarkedRegions).not.toContain(ALLOWED_EMAIL);
+    await app.close();
+  });
+
   it("escapes a client name instead of rendering it", async () => {
     const app = await makeApp();
     clientDocument = {
