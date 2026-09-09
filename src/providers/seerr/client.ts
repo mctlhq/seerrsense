@@ -134,6 +134,17 @@ export class SeerrClient {
     };
   }
 
+  /**
+   * Confirms the address and key work, and names who the key belongs to.
+   * Used before a connection is stored so a bad key fails in front of the
+   * person entering it rather than later inside an assistant.
+   */
+  async describeSelf(): Promise<string | undefined> {
+    const data = await this.fetch(`/api/v1/auth/me`);
+    const me = data as { displayName?: string; email?: string; username?: string };
+    return me.displayName || me.username || me.email;
+  }
+
   /** Seerr's own user list, used to file a request as the person who asked. */
   async findUserIdByEmail(email: string): Promise<number | undefined> {
     if (!email) return undefined;

@@ -151,6 +151,49 @@ function consentPage(params: {
 </html>`;
 }
 
+/**
+ * Redeems an authorization code. Shared by the token endpoint and by the
+ * account page's own sign-in, which runs in this process and must not make an
+ * HTTP request to its own token endpoint to do what this function does.
+ */
+export interface RedeemedCode {
+  clientId: string;
+  scope: string;
+  resource: string;
+  subject: string;
+  email: string;
+}
+
+export async function redeemAuthorizationCode(
+  store: AuthStore,
+  params: { code: string; codeVerifier: string; redirectUri: string; clientId?: string },
+): Promise<{ ok: true; grant: RedeemedCode } | { ok: false; description: string }> {
+  if (!isValidPkceString(params.codeVerifier)) {
+    return { ok: false, description: "code_verifier is malformed" };
+  }
+  const record = await store.takeAuthCode(params.code);
+  if (!record) return { ok: false, description: "this code is unknown or expired" };
+  if (params.clientId && params.clientId !== record.clientId) {
+    return { ok: false, description: "this code was issued to another client" };
+  }
+  if (params.redirectUri !== record.redirectUri) {
+    return { ok: false, description: "redirect_uri does not match the code" };
+  }
+  if (!verifyPkceS256(params.codeVerifier, record.codeChallenge)) {
+    return { ok: false, description: "code_verifier does not match the challenge" };
+  }
+  return {
+    ok: true,
+    grant: {
+      clientId: record.clientId,
+      scope: record.scope,
+      resource: record.resource,
+      subject: record.subject,
+      email: record.email,
+    },
+  };
+}
+
 export function registerOAuthRoutes(
   fastify: FastifyInstance,
   config: OAuthConfig,
@@ -420,28 +463,14 @@ export function registerOAuthRoutes(
         return oauthError(reply, 400, "invalid_request",
           "code, code_verifier and redirect_uri are required");
       }
-      if (!isValidPkceString(params.code_verifier)) {
-        return oauthError(reply, 400, "invalid_grant", "code_verifier is malformed");
-      }
-      const record = await store.takeAuthCode(params.code);
-      if (!record) return oauthError(reply, 400, "invalid_grant", "this code is unknown or expired");
-      if (params.client_id && params.client_id !== record.clientId) {
-        return oauthError(reply, 400, "invalid_grant", "this code was issued to another client");
-      }
-      if (params.redirect_uri !== record.redirectUri) {
-        return oauthError(reply, 400, "invalid_grant", "redirect_uri does not match the code");
-      }
-      if (!verifyPkceS256(params.code_verifier, record.codeChallenge)) {
-        return oauthError(reply, 400, "invalid_grant", "code_verifier does not match the challenge");
-      }
-      return issueTokens(reply, {
-        clientId: record.clientId,
-        scope: record.scope,
-        resource: record.resource,
-        subject: record.subject,
-        email: record.email,
-        familyId: randomToken(),
+      const redeemed = await redeemAuthorizationCode(store, {
+        code: params.code,
+        codeVerifier: params.code_verifier,
+        redirectUri: params.redirect_uri,
+        clientId: params.client_id,
       });
+      if (!redeemed.ok) return oauthError(reply, 400, "invalid_grant", redeemed.description);
+      return issueTokens(reply, { ...redeemed.grant, familyId: randomToken() });
     }
 
     if (!params.refresh_token) {

@@ -1,6 +1,7 @@
 import { createMcpHandler, type AuthInfo } from "@modelcontextprotocol/server";
 import { toNodeHandler } from "@modelcontextprotocol/node";
 import fastifyStatic from "@fastify/static";
+import fastifyCookie from "@fastify/cookie";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 import Fastify from "fastify";
@@ -15,10 +16,12 @@ import { MediaResolver } from "./resolver/index.js";
 import { NebiusIntentExtractor } from "./resolver/intent.js";
 import { z } from "zod";
 import { loadAuthSettings, SCOPE_READ } from "../auth/config.js";
-import { registerOAuthRoutes } from "../auth/routes.js";
+import { redeemAuthorizationCode, registerOAuthRoutes } from "../auth/routes.js";
 import { MemoryAuthStore, type AuthStore } from "../auth/store.js";
 import { PostgresAuthStore } from "../auth/store-pg.js";
 import { authenticate, UnauthorizedError, wwwAuthenticate } from "../auth/verifier.js";
+import { registerAccountRoutes } from "./account.js";
+import { issueSession, SESSION_COOKIE } from "../auth/session.js";
 
 const SearchQuerySchema = z.object({ query: z.string().min(1) });
 
@@ -40,7 +43,24 @@ const PUBLIC_PREFIXES = [
   "/favicon.ico",
   "/og.png",
   "/assets/",
+  // The account page and the browser leg of its sign-in. The page itself
+  // carries no data; everything it shows comes from /api/v1/account/*, which
+  // is gated on the session cookie.
+  "/account",
+  "/account/callback",
+  // The browser has no token yet when it finishes its own PKCE exchange here;
+  // the route is guarded by the authorization code and verifier it must present.
+  "/account/session",
 ];
+
+/**
+ * Routes that skip the bearer gate because they authenticate themselves, with
+ * the browser session cookie. They are not public: every handler under this
+ * prefix refuses a request without a valid session, and deliberately does not
+ * accept an MCP access token — an assistant must not be able to read or rewrite
+ * which Seerr it talks to.
+ */
+const SESSION_PREFIXES = ["/api/v1/account/"];
 
 function isPublic(url: string): boolean {
   // Match on the path only: "/healthz?x=1" is the same route, and the previous
@@ -50,6 +70,11 @@ function isPublic(url: string): boolean {
     // "/" is the landing page itself, not a prefix for every route below it.
     prefix.endsWith("/") && prefix !== "/" ? path.startsWith(prefix) : path === prefix,
   );
+}
+
+function isSessionRoute(url: string): boolean {
+  const path = url.split("?")[0];
+  return SESSION_PREFIXES.some((prefix) => path.startsWith(prefix));
 }
 
 export function buildServer(deps: { store?: AuthStore; fetchImpl?: typeof fetch } = {}) {
@@ -70,7 +95,9 @@ export function buildServer(deps: { store?: AuthStore; fetchImpl?: typeof fetch 
     : undefined;
 
   if (authSettings.oauth && authStore) {
-    registerOAuthRoutes(fastify, authSettings.oauth, authStore, { fetchImpl: deps.fetchImpl });
+    const oauth = authSettings.oauth;
+    fastify.register(fastifyCookie);
+    registerOAuthRoutes(fastify, oauth, authStore, { fetchImpl: deps.fetchImpl });
     // Expired rows are ignored on read, but nothing deletes them, so a
     // long-lived database would grow without bound. unref so the sweep never
     // holds the process open.
@@ -100,7 +127,7 @@ export function buildServer(deps: { store?: AuthStore; fetchImpl?: typeof fetch 
     (request.raw as { tenant?: Tenant }).tenant;
 
   fastify.addHook("preHandler", async (request, reply) => {
-    if (isPublic(request.url)) return;
+    if (isPublic(request.url) || isSessionRoute(request.url)) return;
 
     let auth: AuthInfo;
     try {
@@ -157,6 +184,14 @@ export function buildServer(deps: { store?: AuthStore; fetchImpl?: typeof fetch 
   });
 
   fastify.get("/", async (_request, reply) => reply.type("text/html; charset=utf-8").sendFile("index.html"));
+  // cacheControl:false so the plugin does not stamp its own header over the
+  // one that matters here: this page is per-person and must not be cached.
+  fastify.get("/account", async (_request, reply) =>
+    reply
+      .type("text/html; charset=utf-8")
+      .header("cache-control", "no-store")
+      .sendFile("account.html", { cacheControl: false }),
+  );
   fastify.get("/favicon.svg", async (_request, reply) => reply.type("image/svg+xml").sendFile("favicon.svg"));
   fastify.get("/og.png", async (_request, reply) => reply.type("image/png").sendFile("og.png"));
 
@@ -178,6 +213,64 @@ export function buildServer(deps: { store?: AuthStore; fetchImpl?: typeof fetch 
     // the probe will fail (503) and the pod will never become ready to receive traffic.
     return { status: "ready" };
   });
+
+  if (authSettings.oauth && authStore) {
+    const oauth = authSettings.oauth;
+    registerAccountRoutes(fastify, oauth, authStore, tenants);
+
+    // The page finishes its own PKCE exchange here rather than in JavaScript:
+    // the browser gets a session cookie scoped to the account API, and no MCP
+    // access token is ever handed to page script.
+    fastify.get("/account/callback", async (request, reply) => {
+      const query = request.query as Record<string, string | undefined>;
+      if (query.error) {
+        return reply.type("text/html; charset=utf-8").status(400).send(
+          `<p>Sign-in was refused: ${String(query.error).replace(/[<&>]/g, "")}</p>`,
+        );
+      }
+      // The verifier lives in the page, so the page posts the code back to
+      // itself; this route only serves the shell that does that.
+      return reply
+        .type("text/html; charset=utf-8")
+        .header("cache-control", "no-store")
+        .sendFile("account-callback.html", { cacheControl: false });
+    });
+
+    fastify.post("/account/session", async (request, reply) => {
+      const body = (request.body ?? {}) as { code?: string; codeVerifier?: string };
+      if (!body.code || !body.codeVerifier) {
+        return reply.status(400).send({ error: "code and codeVerifier are required" });
+      }
+      // Redeemed in process. Calling our own token endpoint over HTTP would put
+      // the reverse proxy and our own public hostname on the critical path of a
+      // sign-in, to reach code that is right here.
+      const redeemed = await redeemAuthorizationCode(authStore, {
+        code: body.code,
+        codeVerifier: body.codeVerifier,
+        redirectUri: `${oauth.issuer}/account/callback`,
+        clientId: `${oauth.issuer}/account`,
+      });
+      if (!redeemed.ok) {
+        request.log.info({ reason: redeemed.description }, "account sign-in refused");
+        return reply.status(400).send({ error: "that sign-in could not be completed" });
+      }
+
+      const session = await issueSession(
+        { subject: redeemed.grant.subject, email: redeemed.grant.email },
+        oauth.signingKey,
+        oauth.issuer,
+      );
+      return reply
+        .setCookie(SESSION_COOKIE, session.value, {
+          path: "/",
+          httpOnly: true,
+          sameSite: "lax",
+          secure: oauth.issuer.startsWith("https://"),
+          maxAge: session.maxAge,
+        })
+        .send({ ok: true });
+    });
+  }
 
   fastify.get("/api/v1/search", async (request, reply) => {
     const q = SearchQuerySchema.safeParse(request.query);
