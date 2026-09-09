@@ -201,4 +201,31 @@ describe("landing page", () => {
       expect((await app.inject({ method: "GET", url: path })).statusCode, path).toBe(200);
     }
   });
+
+  it("never instructs a token or an environment variable", async () => {
+    const { payload } = await app.inject({ method: "GET", url: "/" });
+    for (const forbidden of [
+      "Authorization: Bearer", "Bearer &lt;your token&gt;", "bearer token",
+      "CF_ACCESS_CLIENT_ID", "CF_ACCESS_CLIENT_SECRET",
+      "NEBIUS_API_KEY", "SEERRSENSE_AUTH_TOKEN", "SEERR_API_KEY",
+    ]) {
+      expect(payload, forbidden).not.toContain(forbidden);
+    }
+  });
+
+  it("gives the three steps and both client paths", async () => {
+    const { payload } = await app.inject({ method: "GET", url: "/" });
+    expect(payload).toContain('id="setup"');
+    for (const needle of [
+      "Add custom connector", "Developer mode",
+      "Settings, then General, then API Key",
+    ]) {
+      expect(payload, needle).toContain(needle);
+    }
+    const [connector, signIn, seerr] = ["Add the connector", "Sign in with Google", "Attach your Seerr"]
+      .map((h) => payload.indexOf(h));
+    expect(connector).toBeGreaterThan(-1);
+    expect(signIn).toBeGreaterThan(connector);
+    expect(seerr).toBeGreaterThan(signIn);
+  });
 });
