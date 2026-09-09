@@ -210,7 +210,11 @@ into a chat and never returned by the API, not even masked.
 The page authenticates with a short-lived session cookie, deliberately not with
 an MCP access token: an assistant holding a token must not be able to read or
 rewrite which Seerr it talks to. The two credentials carry different audiences,
-so neither works in place of the other.
+so neither works in place of the other. The page reports what the signed-in
+caller actually reaches — `GET /api/v1/account/connection` carries a
+`fallback: "household" | "none"` field, computed by the same predicate
+`TenantResolver` itself uses to admit a subject to the household instance, so
+the page can never promise a shared instance a person is not allowed to use.
 
 
 Each signed-in person can attach their own Overseerr or Jellyseerr; their API
@@ -277,7 +281,12 @@ same bearer token as `/mcp`:
 reading, saving and removing a person's attached Seerr, but — as already noted
 above — it authenticates with the browser session cookie set at `/account`, not
 with an MCP access token: an assistant holding a token must not be able to read
-or rewrite which Seerr it talks to.
+or rewrite which Seerr it talks to. `DELETE /api/v1/account/session` ends that
+browser session — it signs the person out of `/account` only, clearing the
+`seerrsense_session` cookie and revoking it server-side. It does not touch any
+MCP grant: refreshing or using an existing Claude/ChatGPT connection keeps
+working after a sign-out, and the only way to revoke those is `POST
+/oauth/revoke`.
 
 ## Architecture
 
@@ -318,7 +327,21 @@ authorization server.
   attached their own instance is offered `SEERR_URL` only if their address is in
   `SEERRSENSE_HOUSEHOLD_EMAILS`; everyone else is told nothing is connected.
   This also fails closed: an unset variable offers the household instance to no
-  signed-in subject.
+  signed-in subject. The one exception is a deployment with no
+  `SEERRSENSE_ENCRYPTION_KEY`, where there is no per-user path to resolve at
+  all and every caller reaches the household instance with no address checked.
+  The account page states whichever of the two applies rather than guessing: it
+  reads the resolver's own `householdFallback` answer instead of keeping a
+  second copy of the email list.
+- **Signing out ends the browser session, not MCP access.** `DELETE
+  /api/v1/account/session` clears the `seerrsense_session` cookie and records
+  its `jti` as revoked, so a captured cookie value is refused with 401
+  afterwards too, not just forgotten by the browser. It never touches
+  `oauth_refresh_tokens` or `user_connections`; revoking an MCP grant is a
+  separate, explicit action at `POST /oauth/revoke`. On `MemoryAuthStore` the
+  revocation list is lost on restart, exactly like refresh tokens — a
+  self-hoster running without `DATABASE_URL` gets a stateless-again session on
+  the next deploy rather than a hard failure.
 - **User-submitted Seerr addresses are guarded against SSRF.** A submitted
   address must be `https`, carry no userinfo, query or fragment, and must not
   resolve — by literal IP or by DNS, checked again on every dial, not only at

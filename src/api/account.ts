@@ -56,7 +56,7 @@ export function registerAccountRoutes(
   async function sessionOf(request: FastifyRequest): Promise<Session | undefined> {
     const cookies = (request as unknown as { cookies?: Record<string, string | undefined> }).cookies;
     const cookie = cookies?.[SESSION_COOKIE];
-    return readSession(cookie, config.signingKey, config.issuer);
+    return readSession(cookie, config.signingKey, config.issuer, (id) => store.isSessionRevoked(id));
   }
 
   function requireEncryption(reply: FastifyReply): Buffer | undefined {
@@ -77,6 +77,10 @@ export function registerAccountRoutes(
     return reply.header("cache-control", "no-store").send({
       email: session.email,
       connected: connection !== undefined,
+      // What this caller reaches with no connection of their own — the
+      // resolver's own answer, not a second reading of
+      // SEERRSENSE_HOUSEHOLD_EMAILS.
+      fallback: tenants.householdFallback(session.email, session.subject),
       // The key itself is never returned, not even masked.
       seerrUrl: connection?.seerrUrl,
       cfAccessConfigured: connection?.cfAccessClientIdSealed !== undefined,
@@ -186,6 +190,28 @@ export function registerAccountRoutes(
     if (!session) return reply.status(401).send({ error: "not signed in" });
     await store.deleteUserConnection(session.subject);
     tenants.forget(session.subject);
-    return reply.header("cache-control", "no-store").send({ connected: false });
+    return reply.header("cache-control", "no-store").send({
+      connected: false,
+      fallback: tenants.householdFallback(session.email, session.subject),
+    });
+  });
+
+  // Ends the browser session only. MCP grants (refresh and access tokens) are
+  // untouched here — those are revoked only via POST /oauth/revoke — so
+  // signing out of the account page never signs an assistant out.
+  fastify.delete("/api/v1/account/session", async (request, reply) => {
+    const session = await sessionOf(request);
+    if (session?.id && session.expiresAt) {
+      await store.revokeSession(session.id, session.expiresAt);
+    }
+    return reply
+      .header("cache-control", "no-store")
+      .clearCookie(SESSION_COOKIE, {
+        path: "/",
+        httpOnly: true,
+        sameSite: "lax",
+        secure: config.issuer.startsWith("https://"),
+      })
+      .send({ signedOut: true });
   });
 }

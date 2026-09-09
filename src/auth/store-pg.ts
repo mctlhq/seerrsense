@@ -67,6 +67,10 @@ const SCHEMA_SQL = `
         count   INT    NOT NULL DEFAULT 0,
         PRIMARY KEY (subject, day)
       );
+      CREATE TABLE IF NOT EXISTS revoked_sessions (
+        jti        TEXT   PRIMARY KEY,
+        expires_at BIGINT NOT NULL
+      );
     `;
 
 /**
@@ -227,6 +231,7 @@ export class PostgresAuthStore implements AuthStore {
     await this.pool.query(`DELETE FROM oauth_pending_auth WHERE expires_at < $1`, [now]);
     await this.pool.query(`DELETE FROM oauth_auth_codes WHERE expires_at < $1`, [now]);
     await this.pool.query(`DELETE FROM oauth_refresh_tokens WHERE expires_at < $1`, [now]);
+    await this.pool.query(`DELETE FROM revoked_sessions WHERE expires_at < $1`, [now]);
     // user_connections is not swept here on purpose — see the note on the type.
   }
 
@@ -268,6 +273,20 @@ export class PostgresAuthStore implements AuthStore {
 
   async deleteUserConnection(subject: string): Promise<void> {
     await this.pool.query(`DELETE FROM user_connections WHERE subject = $1`, [subject]);
+  }
+
+  async revokeSession(id: string, expiresAt: number): Promise<void> {
+    await this.pool.query(
+      `INSERT INTO revoked_sessions (jti, expires_at) VALUES ($1, $2)
+       ON CONFLICT (jti) DO UPDATE SET expires_at = EXCLUDED.expires_at`,
+      [id, expiresAt],
+    );
+  }
+
+  async isSessionRevoked(id: string): Promise<boolean> {
+    const { rows } = await this.pool.query(
+      `SELECT 1 FROM revoked_sessions WHERE jti = $1`, [id]);
+    return rows.length > 0;
   }
 
   async countResolve(subject: string, day: string): Promise<number> {

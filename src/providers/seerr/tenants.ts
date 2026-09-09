@@ -55,40 +55,41 @@ export class TenantResolver {
     // No identity at all: the legacy shared token and stdio mode. They get the
     // household instance, which is exactly what they had before, with no
     // address to check.
-    if (!subject || subject === "static-token" || !this.store || !this.encryptionKey) {
-      return this.householdTenant(email, subject, false);
+    const identity = this.identity(subject);
+    if (!identity) {
+      return this.householdTenant(email, subject);
     }
 
-    const cached = this.cache.get(subject);
+    const cached = this.cache.get(identity.subject);
     if (cached && cached.expiresAt > Date.now()) return cached.tenant;
 
-    const connection = await this.store.getUserConnection(subject);
+    const connection = await identity.store.getUserConnection(identity.subject);
     let tenant: Tenant;
     if (connection) {
       tenant = {
         client: new SeerrClient({
           baseUrl: connection.seerrUrl,
-          apiKey: open(connection.seerrApiKeySealed, this.encryptionKey),
+          apiKey: open(connection.seerrApiKeySealed, identity.encryptionKey),
           locale: connection.locale,
           cfAccessClientId: connection.cfAccessClientIdSealed
-            ? open(connection.cfAccessClientIdSealed, this.encryptionKey)
+            ? open(connection.cfAccessClientIdSealed, identity.encryptionKey)
             : undefined,
           cfAccessClientSecret: connection.cfAccessClientSecretSealed
-            ? open(connection.cfAccessClientSecretSealed, this.encryptionKey)
+            ? open(connection.cfAccessClientSecretSealed, identity.encryptionKey)
             : undefined,
           untrusted: true,
           lookup: this.lookup,
         }),
         email: connection.email || email,
         source: "own",
-        subject,
+        subject: identity.subject,
       };
     } else {
-      tenant = await this.householdTenant(email, subject, true);
+      tenant = await this.householdTenant(email, identity.subject);
     }
 
-    const replaced = this.cache.get(subject);
-    this.cache.set(subject, { tenant, expiresAt: Date.now() + this.ttlMs });
+    const replaced = this.cache.get(identity.subject);
+    this.cache.set(identity.subject, { tenant, expiresAt: Date.now() + this.ttlMs });
     if (replaced && replaced.tenant !== tenant) void closeIfOwned(replaced.tenant);
     return tenant;
   }
@@ -103,32 +104,71 @@ export class TenantResolver {
   }
 
   /**
-   * `ownerOnly` is true on the signed-in path, where a caller with no
-   * user_connections row of their own must be a named household owner to
-   * reach the shared instance. It is false for the legacy shared token and
-   * stdio mode, which have no address to check and keep today's behaviour.
+   * The per-user path, or `undefined` when there is none: a caller needs an
+   * identity of their own, a store to look a connection up in, and a key to
+   * unseal it with. Missing any one of them means there is nothing to resolve
+   * per person, so the caller reaches the household instance with no address
+   * checked — the legacy shared token and stdio mode, and equally any
+   * deployment running without SEERRSENSE_ENCRYPTION_KEY.
+   *
+   * Returns the narrowed trio rather than a boolean so `resolve` can use it
+   * directly: a boolean would leave callers re-testing the same three fields
+   * to satisfy the compiler, which is how the two answers drifted apart in
+   * the first place.
    */
-  private async householdTenant(
-    email: string,
+  private identity(
     subject: string | undefined,
-    ownerOnly: boolean,
-  ): Promise<Tenant> {
-    if (!this.household) return { email, source: "none", subject };
-    if (ownerOnly && !this.householdEmails.has(email.toLowerCase())) {
+  ): { subject: string; store: AuthStore; encryptionKey: Buffer } | undefined {
+    if (!subject || subject === "static-token" || !this.store || !this.encryptionKey) {
+      return undefined;
+    }
+    return { subject, store: this.store, encryptionKey: this.encryptionKey };
+  }
+
+  /**
+   * What a caller with no connection of their own reaches. This is the
+   * resolver's own decision, exposed so the account page can state the truth
+   * instead of keeping a second copy of the rule that drifts from this one.
+   * Synchronous, makes no network call, and never touches the per-subject
+   * cache.
+   *
+   * `subject` matters: an unidentified caller is admitted without an address
+   * check, so applying the allowlist to them here would promise something
+   * stricter than what they actually get.
+   */
+  householdFallback(email: string, subject: string | undefined): "household" | "none" {
+    if (!this.household) return "none";
+    if (!this.identity(subject)) return "household";
+    if (!this.householdEmails.has(email.toLowerCase())) return "none";
+    return "household";
+  }
+
+  /**
+   * Admission to the shared instance, decided by `householdFallback` and
+   * nowhere else — a signed-in caller must be a named household owner, while
+   * the legacy shared token, stdio mode and a keyless deployment have no
+   * address to check and keep today's behaviour.
+   */
+  private async householdTenant(email: string, subject: string | undefined): Promise<Tenant> {
+    if (this.householdFallback(email, subject) === "none") {
       return { email, source: "none", subject };
     }
+    // Reaching here means a client exists: householdFallback returns "none"
+    // whenever `this.household` is undefined. TypeScript cannot see that
+    // invariant through the method call, hence the assertion below.
+    const household = this.household!;
     // On the shared instance the API key belongs to the owner, so a request
     // would otherwise be filed under their name. Overseerr accepts a userId,
     // and the person's own address is what identifies them there.
     let attributedUserId: number | undefined;
     if (email) {
       try {
-        attributedUserId = await this.household.findUserIdByEmail(email);
+        attributedUserId = await household.findUserIdByEmail(email);
       } catch {
         // Attribution is a nicety; failing to look it up must not stop a search.
       }
     }
-    return { client: this.household, email, attributedUserId, source: "household", subject };
+    return { client: household, email, attributedUserId, source: "household", subject };
   }
 }
 
