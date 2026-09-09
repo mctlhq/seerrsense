@@ -10,24 +10,32 @@
  * So the stylesheet is vendored here instead, byte for byte, and nothing is
  * fetched at runtime. `--check` in CI compares the committed file against the
  * source and fails on a difference, which turns what used to be a silent
- * change into a reviewable diff.
+ * change into a reviewable diff. With a pinned SOURCE that check can now only
+ * fail because someone edited the vendored copy by hand or moved SOURCE — not
+ * because the design system shipped something upstream.
  *
- * ## Why the CDN and not the package
+ * ## Why the pinned CDN path and not the package
  *
- * `@mctlhq/css` is published to GitHub Packages, and taking the tokens from a
- * pinned version there would be better: a version to point at, no reliance on
- * an unversioned URL. It cannot be done yet. The published 0.4.0 (2026-08-08)
- * is not merely older than what the CDN serves, it is a different visual
- * identity: its accent is cyan #00e5ff and its display font is Geist, where
- * the deployed sheet is terracotta #e25a3c and Onest. Vendoring the package
- * today would silently restyle the site.
+ * SOURCE points at a version, not at the floating `ui.mctl.ai/mctl.css`. That
+ * path is served `immutable` for a year and mctl-design's CI refuses to edit,
+ * move or delete an already-published version directory, so the bytes behind
+ * it cannot change: upgrading is an edit made here on purpose rather than
+ * something that happens to this page four hours after an unrelated merge on
+ * another repository (mctlhq/mctl-design#75, #76).
  *
- * Switching over is a one-line change to SOURCE once mctl-design publishes a
- * version that matches what it deploys — mctlhq/mctl-design#75.
+ * `@mctlhq/css@0.5.0` on GitHub Packages carries the same sheet and would also
+ * be pinnable. It is not used because consuming it needs a GitHub Packages
+ * token in this repository's CI and in the container build, which is
+ * centralised in mctl-gitops and has no npm credentials. The pinned URL buys
+ * the same immovability without distributing a credential.
+ *
+ * Until 2026-09-09 there was a sharper reason to avoid the package: the
+ * published 0.4.0 predated the editorial-warm rebrand, so it was cyan on Geist
+ * where the CDN served terracotta on Onest. mctl-design 0.5.0 closed that.
  */
 import { readFileSync, writeFileSync } from "node:fs";
 
-const SOURCE = "https://ui.mctl.ai/mctl.css";
+const SOURCE = "https://ui.mctl.ai/0.5.0/mctl.css";
 const OUTPUT = new URL("../public/assets/tokens.css", import.meta.url).pathname;
 
 /**

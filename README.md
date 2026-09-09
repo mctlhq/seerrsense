@@ -173,6 +173,12 @@ in CI and fails when the committed copy no longer matches the design system, so
 an upstream change arrives as a diff to review rather than as a surprise on the
 site.
 
+The source is a pinned version — `https://ui.mctl.ai/0.5.0/mctl.css` — not the
+floating `mctl.css`. That path is served `immutable` and mctl-design's CI
+refuses to edit, move or delete a published version directory, so upgrading is
+an edit made here on purpose. Change the `SOURCE` constant in
+`scripts/sync-tokens.mjs`, run `npm run sync:tokens`, and commit the diff.
+
 The MCP endpoint shown on the page is derived from `window.location.origin`, so
 promoting a domain needs no change here.
 
