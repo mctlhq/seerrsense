@@ -48,6 +48,8 @@ const PUBLIC_PREFIXES = [
   // is gated on the session cookie.
   "/account",
   "/account/callback",
+  "/privacy",
+  "/terms",
   // The browser has no token yet when it finishes its own PKCE exchange here;
   // the route is guarded by the authorization code and verifier it must present.
   "/account/session",
@@ -191,6 +193,14 @@ export function buildServer(deps: { store?: AuthStore; fetchImpl?: typeof fetch 
       .type("text/html; charset=utf-8")
       .header("cache-control", "no-store")
       .sendFile("account.html", { cacheControl: false }),
+  );
+  // Required by Google before an OAuth app can be published, and independently
+  // right for a service that stores other people's credentials.
+  fastify.get("/privacy", async (_request, reply) =>
+    reply.type("text/html; charset=utf-8").sendFile("privacy.html"),
+  );
+  fastify.get("/terms", async (_request, reply) =>
+    reply.type("text/html; charset=utf-8").sendFile("terms.html"),
   );
   fastify.get("/favicon.svg", async (_request, reply) => reply.type("image/svg+xml").sendFile("favicon.svg"));
   fastify.get("/og.png", async (_request, reply) => reply.type("image/png").sendFile("og.png"));

@@ -154,6 +154,33 @@ describe("landing page", () => {
     expect(page.payload).toContain('class="table-scroll"');
   });
 
+  it("serves the privacy and terms pages without a token", async () => {
+    // Google will not let the OAuth app leave testing without these two links,
+    // and a service holding other people's API keys owes them the statement.
+    for (const path of ["/privacy", "/terms"]) {
+      const response = await app.inject({ method: "GET", url: path });
+      expect(response.statusCode, path).toBe(200);
+      expect(response.headers["content-type"], path).toContain("text/html");
+    }
+  });
+
+  it("says what it stores and does not claim it cannot look", async () => {
+    const { payload } = await app.inject({ method: "GET", url: "/privacy" });
+    // The claim that matters: the operator can technically read what is stored.
+    // Saying "we cannot access your data" would be false for a hosted service
+    // that holds the encryption key, and both connector reviews reject it.
+    expect(payload).toContain("technically able to read");
+    expect(payload).not.toMatch(/we cannot (access|read|see)/i);
+    expect(payload).toContain("AES-256-GCM");
+    expect(payload).toContain("Disconnect");
+  });
+
+  it("links both pages from the landing page footer", async () => {
+    const { payload } = await app.inject({ method: "GET", url: "/" });
+    expect(payload).toContain('href="/privacy"');
+    expect(payload).toContain('href="/terms"');
+  });
+
   it("keeps the health probes unauthenticated", async () => {
     for (const path of ["/healthz", "/readyz", "/health", "/ready"]) {
       expect((await app.inject({ method: "GET", url: path })).statusCode, path).toBe(200);

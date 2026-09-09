@@ -1,0 +1,119 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Privacy — SeerrSense</title>
+<meta name="description" content="What SeerrSense stores, what it sends where, what the operator can see, and how to remove your data.">
+<link rel="icon" type="image/svg+xml" href="/favicon.svg">
+<link rel="stylesheet" href="/assets/tokens.css">
+<link rel="stylesheet" href="/assets/components.css">
+<style>
+  main { max-width: 720px; margin: 0 auto; padding: 56px 24px 96px; }
+  main h2 { margin-top: 44px; }
+  main p, main li { color: var(--surface-fg-muted); }
+  main ul { padding-left: 22px; }
+  main li { margin-bottom: 10px; }
+  .updated { font-family: var(--font-mono); font-size: 13px; color: var(--surface-fg-subtle); }
+  table { margin-top: 16px; }
+</style>
+</head>
+<body>
+<header class="wrap topbar">
+  <a class="brand" href="/">SeerrSense</a>
+  <nav class="topbar-links"><a href="/">Home</a> <a href="/terms">Terms</a></nav>
+</header>
+
+<main>
+  <p class="eyebrow">Privacy</p>
+  <h1 style="font-size:clamp(28px,4vw,40px)">What SeerrSense does with your data</h1>
+  <p class="updated">Last updated 9 September 2026</p>
+
+  <p>SeerrSense sits between an AI assistant and your own Overseerr or Jellyseerr. It holds as
+    little as it can, and this page says plainly what that is.</p>
+
+  <h2>What is stored</h2>
+  <div class="table-scroll">
+    <table>
+      <thead><tr><th scope="col">Data</th><th scope="col">Why</th><th scope="col">Kept until</th></tr></thead>
+      <tbody>
+        <tr>
+          <td class="muted">Your Google account identifier and email address</td>
+          <td class="muted">To know whose request this is and whether you are allowed to use the server</td>
+          <td class="muted">You disconnect, or your tokens expire</td>
+        </tr>
+        <tr>
+          <td class="muted">The address and API key of the Seerr you attached</td>
+          <td class="muted">To search and request on your instance rather than a shared one</td>
+          <td class="muted">You press Disconnect</td>
+        </tr>
+        <tr>
+          <td class="muted">Refresh tokens, stored as a hash</td>
+          <td class="muted">To keep an assistant connected without asking you to sign in daily</td>
+          <td class="muted">30 days, or until revoked</td>
+        </tr>
+        <tr>
+          <td class="muted">Sign-ins in progress</td>
+          <td class="muted">To carry one login from Google back to the client that started it</td>
+          <td class="muted">10 minutes</td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+
+  <p>Your Seerr API key is encrypted with AES-256-GCM before it is written down, and it is never
+    returned by the interface, not even partially masked. No password of yours is ever seen by
+    this service: signing in happens on Google's own pages.</p>
+
+  <h2>What is not stored</h2>
+  <ul>
+    <li>Your media library, your watch history, and the requests you have made in Seerr. Those
+      live in your Seerr and are read on demand, never copied here.</li>
+    <li>The content of your conversations with an assistant.</li>
+    <li>Payment details. There are none.</li>
+  </ul>
+
+  <h2>Where data goes</h2>
+  <ul>
+    <li><strong>To your Seerr.</strong> Searches and requests are sent to the instance you
+      attached, with the key you gave, from this server.</li>
+    <li><strong>To Google.</strong> Only the sign-in itself. Google tells this service your
+      account identifier, your email address and whether it is verified.</li>
+    <li><strong>To a language model, when one is configured.</strong> If the ordinary searches
+      fail to find what you meant, the phrase you typed is sent to a model provider to propose
+      titles. Only that phrase is sent, never your library or your key, and the proposals are
+      checked back against your Seerr before you see them.</li>
+    <li>Nowhere else. Nothing is sold, shared with advertisers, or used to train models.</li>
+  </ul>
+
+  <h2>What the operator can see</h2>
+  <p>This is a self-operated service, not an anonymous one, and it is honest to say what that
+    means. The person running this server administers the database and holds the key that
+    encrypts stored credentials, so they are technically able to read what is stored, including
+    your Seerr API key. They do not do so as a matter of course, and nothing here is designed to
+    make it convenient, but the encryption protects the data at rest and from anyone else, not
+    from the operator. If that is not an acceptable arrangement for you, run your own copy: the
+    server is open source.</p>
+
+  <h2>Removing your data</h2>
+  <ul>
+    <li>Open <a href="/account">your account page</a> and press <strong>Disconnect</strong>. The
+      stored address and key are deleted immediately.</li>
+    <li>Remove the connector in your assistant, which stops it holding tokens for this server.</li>
+    <li>Revoke this application's access to your Google account at
+      <a href="https://myaccount.google.com/permissions">myaccount.google.com/permissions</a>.</li>
+    <li>To have everything associated with your account removed, write to the address below.</li>
+  </ul>
+
+  <h2>Contact</h2>
+  <p>Questions about any of this go to <a href="mailto:mashkoffdmitry@gmail.com">mashkoffdmitry@gmail.com</a>.</p>
+</main>
+
+<footer class="wrap">
+  <div class="footer-row">
+    <span>SeerrSense — part of the <a href="https://mctl.ai">mctl</a> platform.</span>
+    <span><a href="/terms">Terms</a> · <a href="https://github.com/mctlhq/seerrsense">Source</a></span>
+  </div>
+</footer>
+</body>
+</html>
