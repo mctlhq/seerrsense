@@ -1,5 +1,13 @@
 # Changelog
 
+## [1.5.0](https://github.com/mctlhq/seerrsense/compare/1.4.5...1.5.0) (2026-09-09)
+
+
+### Features
+
+* pin the vendored tokens to a versioned CDN path ([ec474c1](https://github.com/mctlhq/seerrsense/commit/ec474c1f6eccaee9a4b2144a4f075cfe9b93b20a))
+* pin the vendored tokens to a versioned CDN path ([304ed6e](https://github.com/mctlhq/seerrsense/commit/304ed6e5064ed3f4d50b423ce509a220cd445a57))
+
 ## [1.4.5](https://github.com/mctlhq/seerrsense/compare/1.4.4...1.4.5) (2026-09-09)
 
 
