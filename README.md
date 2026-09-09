@@ -338,8 +338,8 @@ authorization server.
 | `npm run build` | compile to `dist/` with `tsc` |
 | `npm run typecheck` | `tsc --noEmit` |
 | `npm test` | run the vitest suite |
-| `npm run sync:tokens` | regenerate `public/assets/tokens.css` from the pinned `@mctlhq/css` version |
-| `npm run check:tokens` | verify the committed tokens file still matches that version (CI gate) |
+| `npm run sync:tokens` | regenerate `public/assets/tokens.css` from the pinned `https://ui.mctl.ai/0.5.0/mctl.css` |
+| `npm run check:tokens` | verify the committed tokens file still matches that source (CI gate) |
 
 CI (`.github/workflows/ci.yml`) runs, in order: `check:tokens`, `typecheck`,
 `test`, then a `docker build` of the image with no push. The test step runs
