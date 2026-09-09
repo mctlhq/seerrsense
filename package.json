@@ -1,7 +1,7 @@
 {
   "name": "seerrsense",
   "version": "1.2.0",
-  "description": "AI companion for Seerr — natural-language media discovery, resolution, and MCP automation.",
+  "description": "AI companion for Seerr \u2014 natural-language media discovery, resolution, and MCP automation.",
   "license": "ISC",
   "main": "index.js",
   "directories": {
@@ -12,7 +12,9 @@
     "dev": "tsx src/index.ts",
     "build": "tsc",
     "typecheck": "tsc --noEmit",
-    "start": "node dist/index.js"
+    "start": "node dist/index.js",
+    "sync:tokens": "node scripts/sync-tokens.mjs",
+    "check:tokens": "node scripts/sync-tokens.mjs --check"
   },
   "keywords": [],
   "author": "",
