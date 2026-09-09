@@ -1,5 +1,13 @@
 # Changelog
 
+## [1.4.5](https://github.com/mctlhq/seerrsense/compare/1.4.4...1.4.5) (2026-09-09)
+
+
+### Bug Fixes
+
+* the consent screen's layout never reaches the browser ([954cfd3](https://github.com/mctlhq/seerrsense/commit/954cfd35d7e30c5292cdd6792875b6e58e7290cf))
+* the consent screen's layout never reaches the browser ([51ef64c](https://github.com/mctlhq/seerrsense/commit/51ef64cb6d77df9552db109ff091a072226d429d))
+
 ## [1.4.4](https://github.com/mctlhq/seerrsense/compare/1.4.3...1.4.4) (2026-09-09)
 
 
