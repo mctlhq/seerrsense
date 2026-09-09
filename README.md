@@ -158,6 +158,11 @@ the key is already theirs.
 `/og.png` and `/assets/*`. Those paths, the health probes and the OAuth
 endpoints are the only ones served without a token.
 
+`/privacy` and `/terms` state what is stored, where it goes, and what the
+operator can technically see. Google requires both before an OAuth app can leave
+testing, and a service holding other people's API keys owes them the statement
+regardless.
+
 There is no catch-all route: this is not a single-page app, and an undeclared
 path is never answered with the page.
 
