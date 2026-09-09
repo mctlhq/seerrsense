@@ -112,17 +112,10 @@ function consentPage(params: {
 <link rel="icon" type="image/svg+xml" href="/favicon.svg">
 <link rel="stylesheet" href="/assets/tokens.css">
 <link rel="stylesheet" href="/assets/components.css">
-<style>
-  main { max-width: 460px; margin: 0 auto; padding: 64px 24px; }
-  .who { margin: 0 0 28px; color: var(--surface-fg-muted); }
-  .grants { margin: 0 0 28px; padding-left: 20px; color: var(--surface-fg-muted); }
-  .grants li { margin-bottom: 8px; }
-  .target { display: block; margin-top: 6px; font-family: var(--font-mono); font-size: 13px;
-            color: var(--surface-fg-subtle); overflow-wrap: anywhere; }
-  .actions { display: flex; gap: 12px; }
-  .actions form { flex: 1; }
-  .actions button { width: 100%; justify-content: center; }
-</style>
+<!-- This page's own layout, in a file rather than inline: the response carries
+     style-src 'self', which drops an inline block silently. The linked sheets
+     keep loading, so the page looks broken rather than unstyled. -->
+<link rel="stylesheet" href="/assets/consent.css">
 </head>
 <body>
 <main>
