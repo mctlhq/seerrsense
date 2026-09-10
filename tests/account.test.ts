@@ -728,6 +728,26 @@ describe("deleting the account", () => {
     await app.close();
   });
 
+  // A cookie with no iat cannot be placed relative to the deletion, so it is
+  // refused once its subject has ever been deleted.
+  it("refuses a pre-jti cookie for a subject that was deleted", async () => {
+    const app = await makeApp();
+    const cookie = await signIn(app, ALLOWED_EMAIL);
+    expect((await app.inject({ method: "DELETE", url: "/api/v1/account", headers: { cookie } })).statusCode).toBe(200);
+    const legacy = await new SignJWT({ email: ALLOWED_EMAIL })
+      .setProtectedHeader({ alg: "HS256", typ: "JWT" })
+      .setIssuer(ISSUER)
+      .setAudience(`${ISSUER}/account`)
+      .setSubject("google:google-sub-1")
+      .setExpirationTime(Math.floor(Date.now() / 1000) + 3600)
+      .sign(new TextEncoder().encode("x".repeat(48)));
+    const response = await app.inject({
+      method: "GET", url: "/api/v1/account/connection", headers: { cookie: `seerrsense_session=${legacy}` },
+    });
+    expect(response.statusCode).toBe(401);
+    await app.close();
+  });
+
   // Google's subject is stable across deletions, and deletion clears the
   // resolve counter, so an unmetered route would be a daily budget reset.
   it("is metered per IP like the connection PUT", async () => {

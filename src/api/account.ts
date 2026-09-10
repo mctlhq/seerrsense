@@ -35,33 +35,34 @@ export function registerAccountRoutes(
     rateLimit?: { max: number; timeWindow: number };
   } = {},
 ) {
-  const putRateLimitConfig = deps.rateLimit
-    ? {
-        config: {
-          rateLimit: {
-            max: deps.rateLimit.max,
-            timeWindow: deps.rateLimit.timeWindow,
-            keyGenerator: (req: FastifyRequest) => req.ip,
-            onExceeded: (req: FastifyRequest) => {
-              req.log.warn(
-                { route: "/api/v1/account/connection", key: "ip" },
-                "rate limit exceeded",
-              );
+  // Per-IP limiter for the routes that must not be loopable, labelled with
+  // the route it guards so a log line says which one was hammered.
+  const ipRateLimited = (route: string) =>
+    deps.rateLimit
+      ? {
+          config: {
+            rateLimit: {
+              max: deps.rateLimit.max,
+              timeWindow: deps.rateLimit.timeWindow,
+              keyGenerator: (req: FastifyRequest) => req.ip,
+              onExceeded: (req: FastifyRequest) => {
+                req.log.warn({ route, key: "ip" }, "rate limit exceeded");
+              },
             },
           },
-        },
-      }
-    : {};
+        }
+      : {};
+  const putRateLimitConfig = ipRateLimited("/api/v1/account/connection");
 
   async function sessionOf(request: FastifyRequest): Promise<Session | undefined> {
     const cookies = (request as unknown as { cookies?: Record<string, string | undefined> }).cookies;
     const cookie = cookies?.[SESSION_COOKIE];
     return readSession(cookie, config.signingKey, config.issuer, async (check) => {
       if (check.id && (await store.isSessionRevoked(check.id))) return true;
-      // A cookie with no iat cannot be placed before a deletion; it is a
-      // pre-jti legacy cookie and is refused outright once its subject has
-      // ever been deleted, which is the safer reading.
-      return store.isSubjectSessionRevoked(check.subject, check.issuedAt ?? Number.MAX_SAFE_INTEGER);
+      // A cookie with no iat cannot be placed before or after a deletion, so
+      // it is treated as issued at the dawn of time: refused once its subject
+      // has ever been deleted, which is the safer reading.
+      return store.isSubjectSessionRevoked(check.subject, check.issuedAt ?? 0);
     });
   }
 
@@ -211,11 +212,13 @@ export function registerAccountRoutes(
   // `sub`, so deleting and signing in again yields the same subject with a
   // fresh resolve counter; unmetered, that would be a free daily budget
   // reset. A handful per five minutes keeps it a deletion, not a loop.
-  fastify.delete("/api/v1/account", putRateLimitConfig, async (request, reply) => {
+  fastify.delete("/api/v1/account", ipRateLimited("/api/v1/account"), async (request, reply) => {
     const session = await sessionOf(request);
     if (!session) return reply.status(401).send({ error: "not signed in" });
-    await store.deleteSubject(session.subject);
-    tenants.forget(session.subject);
+    // Sessions first, data second: the other way round leaves one round trip
+    // in which another device's still-valid cookie can PUT a fresh connection
+    // row for a subject who has just been forgotten — and that table is never
+    // swept. With the sessions gone first, nothing can write after the delete.
     const now = Date.now();
     // A JWT's iat has one-second resolution, so "everything issued before
     // now" is everything issued before this second began; a cookie minted in
@@ -227,6 +230,8 @@ export function registerAccountRoutes(
     if (session.id && session.expiresAt) {
       await store.revokeSession(session.id, session.expiresAt);
     }
+    await store.deleteSubject(session.subject);
+    tenants.forget(session.subject);
     return reply
       .header("cache-control", "no-store")
       .clearCookie(SESSION_COOKIE, {
