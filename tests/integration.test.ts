@@ -370,6 +370,11 @@ test("describeError keeps name, message and stack and drops the payload", async 
   });
   const described = describeError(error);
   expect(described).toEqual({ name: "APICallError", message: "provider answered 500", stack: error.stack });
+  // Short diagnostic scalars from the allowlist survive; anything else does not.
+  const unreachable = Object.assign(new SeerrUnreachableError("could not reach that Seerr", 502), { detail: "Key (email)=(x) exists" });
+  const kept = describeError(unreachable);
+  expect(kept.upstreamStatus).toBe(502);
+  expect(kept).not.toHaveProperty("detail");
   expect(JSON.stringify(described)).not.toContain("forgets everything");
   expect(JSON.stringify(described)).not.toContain("secret");
   expect(describeError("plain string")).toEqual({ name: "Error", message: "plain string" });
