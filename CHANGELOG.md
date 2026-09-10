@@ -1,5 +1,13 @@
 # Changelog
 
+## [1.10.1](https://github.com/mctlhq/seerrsense/compare/1.10.0...1.10.1) (2026-09-10)
+
+
+### Bug Fixes
+
+* **seerr:** raise the request ceiling to 20 s and retry a silent read once ([5b056be](https://github.com/mctlhq/seerrsense/commit/5b056be9d183912b06b7fc24623da413f0582989))
+* **seerr:** raise the request ceiling to 20 s and retry a silent read once ([a676a26](https://github.com/mctlhq/seerrsense/commit/a676a26ddc706b28e899a4a1196b19c7c1cef6b7))
+
 ## [1.10.0](https://github.com/mctlhq/seerrsense/compare/1.9.1...1.10.0) (2026-09-10)
 
 
