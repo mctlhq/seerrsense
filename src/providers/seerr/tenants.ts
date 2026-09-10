@@ -49,7 +49,12 @@ export class TenantResolver {
   ) {}
 
   async resolve(auth: AuthInfo | undefined): Promise<Tenant> {
-    const subject = typeof auth?.extra?.subject === "string" ? auth.extra.subject : undefined;
+    // The legacy shared token carries the sentinel "static-token" as its
+    // subject (verifier.ts). It is not a principal, and `Tenant.subject` is
+    // documented as undefined when there is none, so it is dropped here, at
+    // the one place a subject enters, rather than special-cased downstream.
+    const raw = typeof auth?.extra?.subject === "string" ? auth.extra.subject : undefined;
+    const subject = raw === "static-token" ? undefined : raw;
     const email = typeof auth?.extra?.email === "string" ? auth.extra.email : "";
 
     // No identity at all: the legacy shared token and stdio mode. They get the
@@ -119,7 +124,7 @@ export class TenantResolver {
   private identity(
     subject: string | undefined,
   ): { subject: string; store: AuthStore; encryptionKey: Buffer } | undefined {
-    if (!subject || subject === "static-token" || !this.store || !this.encryptionKey) {
+    if (!subject || !this.store || !this.encryptionKey) {
       return undefined;
     }
     return { subject, store: this.store, encryptionKey: this.encryptionKey };
