@@ -243,13 +243,19 @@ test("a rejected key and an Access challenge from a per-user Seerr are named", a
   householdSeerr.search.mockRejectedValueOnce(new SeerrUnreachableError("could not reach that Seerr", 401));
   const rejected = await call(9);
   expect(rejected.isError).toBe(true);
-  expect(rejected.content[0].text).toMatch(/rejected the API key/);
+  expect(rejected.content[0].text).toMatch(/^The shared Seerr rejected the API key/);
   expect(rejected.content[0].text).toMatch(/operator/);
-  expect(rejected.content[0].text).not.toMatch(/account/);
+  expect(rejected.content[0].text).not.toMatch(/account|Your Seerr/);
 
   householdSeerr.search.mockRejectedValueOnce(new SeerrUnreachableError("could not reach that Seerr"));
   const down = await call(10);
-  expect(down.content[0].text).toMatch(/could not reach your Seerr/);
+  expect(down.content[0].text).toMatch(/could not reach the shared Seerr/);
+
+  // A proxy's 429 is an error on that side, not a wrong address.
+  householdSeerr.search.mockRejectedValueOnce(new SeerrUnreachableError("could not reach that Seerr", 429));
+  const throttled = await call(17);
+  expect(throttled.content[0].text).toMatch(/error \(429\)/);
+  expect(throttled.content[0].text).not.toMatch(/API root|not with its API/);
 
   householdSeerr.search.mockRejectedValueOnce(new SeerrUnreachableError("could not reach that Seerr", 503));
   const failing = await call(11);
@@ -286,6 +292,7 @@ test("explain() sends an attached user to /account and a household user to the o
   expect(explain(new SeerrUnreachableError("x", 302), own, quiet)).toMatch(/not with its API \(302\).*root of your Seerr/);
   expect(explain(new SeerrUnreachableError("x", 404), { ...own, byId: true }, quiet)).toMatch(/TMDB id/);
   expect(explain(new SeerrUnreachableError("x"), own, quiet)).toMatch(/could not reach your Seerr.*https:\/\/s.test\/account/);
+  expect(explain(new SeerrUnreachableError("x", 404), household, quiet)).toMatch(/^The shared Seerr answered 404.*operator/);
   expect(explain(new SeerrAccessChallengeError(), own, quiet)).toMatch(/service token on https:\/\/s.test\/account/);
 });
 

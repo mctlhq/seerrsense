@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeAll, vi } from "vitest";
+import { describe, it, expect, beforeAll, afterEach, vi } from "vitest";
 import { SignJWT, exportJWK, generateKeyPair, type CryptoKey } from "jose";
 
 const SIGNING_KEY = new TextEncoder().encode("x".repeat(48));
@@ -1180,6 +1180,12 @@ describe("scopes", () => {
 });
 
 describe("legacy token", () => {
+  // The variable decides whether the shared token is accepted at all; a
+  // failed assertion must not leak it into every app built afterwards.
+  afterEach(() => {
+    delete process.env.SEERRSENSE_LEGACY_TOKEN_ENABLED;
+  });
+
   it("is refused by default once OAuth is configured", async () => {
     delete process.env.SEERRSENSE_LEGACY_TOKEN_ENABLED;
     const app = await makeApp();
@@ -1202,7 +1208,6 @@ describe("legacy token", () => {
     });
     expect(legacy.statusCode).toBe(200);
     expect((await app.inject({ method: "GET", url: "/healthz?probe=1" })).statusCode).toBe(200);
-    delete process.env.SEERRSENSE_LEGACY_TOKEN_ENABLED;
     await app.close();
   });
 
@@ -1215,7 +1220,6 @@ describe("legacy token", () => {
       headers: { authorization: "Bearer secret123" },
     });
     expect(response.statusCode).toBe(401);
-    delete process.env.SEERRSENSE_LEGACY_TOKEN_ENABLED;
     await app.close();
   });
 });

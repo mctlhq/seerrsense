@@ -115,13 +115,15 @@ export interface ExplainContext {
 export function explain(error: unknown, ctx: ExplainContext, log: (error: unknown) => void): string {
   const { accountUrl, own, byId } = ctx;
   // The household Seerr is the operator's: a signed-in person using it has no
-  // connection of their own, so /account shows them nothing to update.
+  // connection of their own, so /account shows them nothing to update — and
+  // it is not "your Seerr" to them, so the sentences say whose it is.
+  const whose = own ? "Your Seerr" : "The shared Seerr";
   const fixKey = own
     ? `Update the API key on ${accountUrl}.`
-    : "This is the shared Seerr; its operator needs to update its API key.";
+    : "Its operator needs to update its API key.";
   const fixAddress = own
     ? `Check that it is running and that the address on ${accountUrl} is the root of your Seerr.`
-    : "This is the shared Seerr; its operator needs to check it.";
+    : "Its operator needs to check it.";
   if (error instanceof SeerrAccessChallengeError) {
     return own
       ? `Your Seerr is behind Cloudflare Access. Add its service token on ${accountUrl}.`
@@ -136,21 +138,22 @@ export function explain(error: unknown, ctx: ExplainContext, log: (error: unknow
     error instanceof SeerrUnreachableError
       ? error.upstreamStatus
       : Number(/^Seerr API error: (\d{3})/.exec(error instanceof Error ? error.message : "")?.[1]) || undefined;
-  if (status === 401 || status === 403) return `Your Seerr rejected the API key. ${fixKey}`;
+  if (status === 401 || status === 403) return `${whose} rejected the API key. ${fixKey}`;
   if (status === 404) {
     return byId
       ? "Seerr does not know that title. Check the media type and TMDB id."
-      : `Your Seerr answered 404 to a search, which usually means the address is not its API root. ${fixAddress}`;
+      : `${whose} answered 404 to a search, which usually means the address is not its API root. ${fixAddress}`;
   }
-  if (status !== undefined && status >= 500) {
-    return `Your Seerr answered with an error (${status}). Try again in a moment.`;
+  // Any other 4xx or 5xx is an error on the Seerr side — 429 from a proxy in
+  // front of it being the realistic 4xx — and not an address problem.
+  if (status !== undefined && status >= 400) {
+    return `${whose} answered with an error (${status}). Try again in a moment.`;
   }
   if (error instanceof SeerrUnreachableError) {
     return status !== undefined
-      ? `Your Seerr answered, but not with its API (${status}). ${fixAddress}`
-      : `SeerrSense could not reach your Seerr. ${fixAddress}`;
+      ? `${whose} answered, but not with its API (${status}). ${fixAddress}`
+      : `SeerrSense could not reach ${own ? "your" : "the shared"} Seerr. ${fixAddress}`;
   }
-  if (status !== undefined) return `Your Seerr answered with an error (${status}). Try again in a moment.`;
   if (error instanceof ResolveBudgetError) return error.message;
   const message = error instanceof Error ? error.message : String(error);
   if (message.startsWith("Media is already in status: ")) {
