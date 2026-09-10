@@ -528,7 +528,13 @@ export function buildServer(
   // redirect there would be a second answer to a call that expects one.
   for (const withSlash of PUBLIC_REDIRECTS) {
     const page = withSlash.slice(0, -1);
-    fastify.get(withSlash, async (_request, reply) => reply.redirect(page, 301));
+    fastify.get(withSlash, async (request, reply) => {
+      // Carry the query across. Nothing under these four reads its own query
+      // today, but a redirect that quietly drops it is the kind of thing a
+      // later ?utm= or ?error= discovers the hard way.
+      const query = request.url.slice(request.url.indexOf("?"));
+      return reply.redirect(request.url.includes("?") ? page + query : page, 301);
+    });
   }
   // What a browser gets at an address that is not a page (see the auth gate
   // for how it arrives here). Anything else that reaches this handler has

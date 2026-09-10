@@ -188,6 +188,9 @@ describe("landing page", () => {
       const response = await app.inject({ method: "GET", url: `${page}/` });
       expect(response.statusCode, page).toBe(301);
       expect(response.headers.location, page).toBe(page);
+      const withQuery = await app.inject({ method: "GET", url: `${page}/?a=1&b=2` });
+      expect(withQuery.statusCode, page).toBe(301);
+      expect(withQuery.headers.location, page).toBe(`${page}?a=1&b=2`);
     }
     // Exactly those four paths, not the subtrees under them. A sibling of the
     // redirect, asked for without a token and without an HTML Accept (so the
