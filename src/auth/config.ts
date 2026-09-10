@@ -95,10 +95,14 @@ export function loadAuthSettings(
   // per-person consent flow, is exactly what a directory review flags, and
   // the previous default of "on until told off" left it accepted on any
   // deployment that forgot the variable.
-  const legacyEnabled =
-    parsed.SEERRSENSE_LEGACY_TOKEN_ENABLED === undefined
-      ? !oauthConfigured
-      : parsed.SEERRSENSE_LEGACY_TOKEN_ENABLED === "true";
+  //
+  // Without OAuth the old rule still holds — anything but "false" is on — so a
+  // self-hoster's `=1` or an empty value from a compose file keeps booting.
+  // With OAuth, only the exact string "true" opens it: the variable is then a
+  // deliberate exception, and a typo must not be one.
+  const legacyEnabled = oauthConfigured
+    ? parsed.SEERRSENSE_LEGACY_TOKEN_ENABLED === "true"
+    : parsed.SEERRSENSE_LEGACY_TOKEN_ENABLED !== "false";
   const legacy = legacyEnabled ? legacyToken : undefined;
   if (!oauthConfigured) {
     if (required.some(Boolean)) {

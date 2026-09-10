@@ -593,7 +593,9 @@ export function buildServer(
   const handler = createMcpHandler(async (ctx) => {
     const tenant = await tenants.resolve(ctx.authInfo);
     const budget = authStore ? { store: authStore, options: resolveBudget } : undefined;
-    return createSeerrSenseMcpServer(ctx.authInfo?.scopes, tenant, budget);
+    return createSeerrSenseMcpServer(ctx.authInfo?.scopes, tenant, budget, (error) =>
+      fastify.log.error({ err: error }, "a tool call failed for a reason the caller was not told"),
+    );
   });
   const nodeHandler = toNodeHandler(handler);
 

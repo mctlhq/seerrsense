@@ -72,7 +72,11 @@ Current MCP tools, with the annotations the connector directories read:
 | `search_media` | title search through the person's Seerr | true | false |
 | `resolve_media` | a description to one verified title | true | false |
 | `get_media` | the canonical record for one TMDB id | true | false |
-| `request_media` | files a request in the person's Seerr | false | true |
+| `request_media` | files a request in the person's Seerr | false | false |
+
+`request_media` is the write (`readOnlyHint: false`, which is what makes a
+client confirm before calling it) but not destructive: it adds a request and
+removes or overwrites nothing.
 
 Every tool declares an `outputSchema` and answers with `structuredContent`.
 `request_media` returns the request's id and status only; the raw Seerr
@@ -161,7 +165,7 @@ Setting some but not all is refused at startup.
 | `SEERRSENSE_OPEN_SIGNUP` | Set to exactly `true` to admit any Google account, ignoring `SEERRSENSE_ALLOWED_EMAILS`. Any other value — including `TRUE`, `1`, `yes` — means closed |
 | `SEERRSENSE_HOUSEHOLD_EMAILS` | Comma-separated addresses allowed to fall back to the shared `SEERR_URL` instance when they have no Seerr of their own attached. **Empty offers it to nobody signed in** — the legacy shared token and stdio mode are unaffected |
 | `SEERRSENSE_OAUTH_CLIENTS` | Optional pre-registered clients, `client_id=redirect_uri[,uri];...` |
-| `SEERRSENSE_LEGACY_TOKEN_ENABLED` | Whether `SEERRSENSE_AUTH_TOKEN` is accepted over HTTP. **Unset: on without OAuth, off once OAuth is configured.** Exactly `true` turns it on alongside OAuth; anything else turns it off |
+| `SEERRSENSE_LEGACY_TOKEN_ENABLED` | Whether `SEERRSENSE_AUTH_TOKEN` is accepted over HTTP. **Without OAuth: on unless set to `false`** (it is the only credential). **With OAuth: off unless set to exactly `true`** |
 | `SEERRSENSE_ACCESS_TOKEN_TTL` | Access token lifetime in seconds, default 3600 |
 | `SEERRSENSE_REFRESH_TOKEN_TTL` | Refresh token lifetime in seconds, default 30 days |
 | `DATABASE_URL` | PostgreSQL for OAuth state, attached Seerr instances and the resolve-budget counters. Without it all three live in memory and a restart detaches everyone and resets the budget |
@@ -394,7 +398,8 @@ authorization server.
   `seerr:request` itself.
 - The shared `SEERRSENSE_AUTH_TOKEN` is compared in constant time and, once
   OAuth is configured, **not accepted unless `SEERRSENSE_LEGACY_TOKEN_ENABLED`
-  is exactly `true`**. Without OAuth it is the only credential and stays on.
+  is exactly `true`**. Without OAuth it is the only credential and stays on
+  unless that variable is set to `false`.
 
 ## Development
 

@@ -28,18 +28,21 @@ const SERVER_VERSION: string = createRequire(import.meta.url)("../../package.jso
 
 /**
  * Tool annotations as the connector directories read them. The three read
- * tools are safe to call again with the same arguments; `request_media` is
- * the one write, and it is marked destructive on purpose: filing a request
- * changes state on the person's own Seerr, and both Claude and ChatGPT use
- * this hint to confirm with the user before calling it. The tool description
- * used to ask for that confirmation in words, which the directories reject as
- * an instruction to the model rather than a description of the tool.
+ * tools are safe to call again with the same arguments. `request_media` is
+ * the one write: `readOnlyHint: false` is what makes Claude and ChatGPT
+ * confirm with the person before calling it (the description used to ask
+ * for that in words, which the directories reject as an instruction to the
+ * model). It is *not* destructive in the spec's sense — filing a request
+ * adds a row on the person's Seerr and removes or overwrites nothing, and
+ * the tool refuses when the title is already there — so `destructiveHint`
+ * is false. Annotation accuracy is the thing a reviewer compares against
+ * behaviour; caution expressed as a wrong hint reads as mis-annotation.
  *
  * `openWorldHint: false` everywhere: every tool talks to one bounded system,
  * the Seerr the person attached, never the open internet.
  */
 const READ_ONLY = { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false } as const;
-const WRITE = { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: false } as const;
+const WRITE = { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false } as const;
 
 const ResolutionResultSchema = z.object({
   candidate: MediaCandidateSchema,
@@ -51,12 +54,12 @@ const SearchResultSchema = z.object({
   results: z.array(MediaCandidateSchema).describe("Up to five best matches, in Seerr's order"),
 });
 
-/** Overseerr's request status codes, as names a person can read. */
-const REQUEST_STATUS: Record<number, string> = { 1: "PENDING", 2: "APPROVED", 3: "DECLINED" };
+/** Overseerr's MediaRequestStatus codes, as names a person can read. */
+const REQUEST_STATUS: Record<number, string> = { 1: "PENDING", 2: "APPROVED", 3: "DECLINED", 4: "FAILED", 5: "COMPLETED" };
 
 const RequestResultSchema = z.object({
   requestId: z.number().int().positive().optional().describe("The request's id in Seerr, when Seerr returned one"),
-  requestStatus: z.string().describe("PENDING, APPROVED, DECLINED or UNKNOWN"),
+  requestStatus: z.string().describe("PENDING, APPROVED, DECLINED, FAILED, COMPLETED, or UNKNOWN when Seerr did not say"),
   mediaType: MediaTypeSchema,
   tmdbId: z.number().int().positive(),
   seasons: z.array(z.number().int().positive()).optional().describe("The seasons the request covers (TV only)"),
@@ -75,12 +78,15 @@ function summariseRequest(
   const record = (raw && typeof raw === "object" ? raw : {}) as Record<string, unknown>;
   const requestId = typeof record.id === "number" && record.id > 0 ? record.id : undefined;
   const requestStatus = typeof record.status === "number" ? (REQUEST_STATUS[record.status] ?? "UNKNOWN") : "UNKNOWN";
-  const seasons =
-    payload.mediaType === "tv" && Array.isArray(record.seasons)
-      ? record.seasons
-          .map((season) => (season && typeof season === "object" ? (season as Record<string, unknown>).seasonNumber : undefined))
-          .filter((n): n is number => typeof n === "number" && n > 0)
-      : payload.seasons;
+  // What Seerr says it filed wins, but only when it says something: an empty
+  // or unparseable list from Seerr must not erase the seasons the caller asked
+  // for, which are the better information in that case.
+  const fromSeerr = Array.isArray(record.seasons)
+    ? record.seasons
+        .map((season) => (season && typeof season === "object" ? (season as Record<string, unknown>).seasonNumber : undefined))
+        .filter((n): n is number => typeof n === "number" && n > 0)
+    : [];
+  const seasons = payload.mediaType === "tv" && fromSeerr.length > 0 ? fromSeerr : payload.seasons;
   return {
     requestId,
     requestStatus,
@@ -97,27 +103,32 @@ function summariseRequest(
  * internal marker. A reviewer calling each tool expects to learn what to do
  * next, not which layer broke.
  */
-function explain(error: unknown, accountUrl: string): string {
+function explain(error: unknown, accountUrl: string, log: (error: unknown) => void): string {
   if (error instanceof SeerrAccessChallengeError) {
     return `Your Seerr is behind Cloudflare Access. Add its service token on ${accountUrl}.`;
   }
-  if (error instanceof SeerrUnreachableError) {
-    return `SeerrSense could not reach your Seerr. Check that it is running and that the address on ${accountUrl} is right.`;
+  // A per-user Seerr answers through fetchUntrusted, which folds every non-2xx
+  // into this one error and keeps the status only on the side. A rotated key
+  // is the common case and needs a different instruction from a dead host.
+  const status =
+    error instanceof SeerrUnreachableError
+      ? error.upstreamStatus
+      : Number(/^Seerr API error: (\d{3})/.exec(error instanceof Error ? error.message : "")?.[1]) || undefined;
+  if (status === 401 || status === 403) {
+    return `Your Seerr rejected the API key. Update it on ${accountUrl}.`;
   }
+  if (status === 404) return "Seerr does not know that title. Check the media type and TMDB id.";
+  if (error instanceof SeerrUnreachableError) {
+    return status !== undefined
+      ? `Your Seerr answered with an error (${status}). Try again in a moment.`
+      : `SeerrSense could not reach your Seerr. Check that it is running and that the address on ${accountUrl} is right.`;
+  }
+  if (status !== undefined) return `Your Seerr answered with an error (${status}). Try again in a moment.`;
   if (error instanceof ResolveBudgetError) return error.message;
   const message = error instanceof Error ? error.message : String(error);
-  const upstream = /^Seerr API error: (\d{3})/.exec(message);
-  if (upstream) {
-    const status = Number(upstream[1]);
-    if (status === 401 || status === 403) {
-      return `Your Seerr rejected the API key. Update it on ${accountUrl}.`;
-    }
-    if (status === 404) return "Seerr does not know that title. Check the media type and TMDB id.";
-    return `Your Seerr answered with an error (${status}). Try again in a moment.`;
-  }
   if (message.startsWith("Media is already in status: ")) {
-    const status = message.slice("Media is already in status: ".length);
-    return `That title is already ${status.toLowerCase().replace(/_/g, " ")} on your Seerr, so nothing was requested.`;
+    const state = message.slice("Media is already in status: ".length);
+    return `That title is already ${state.toLowerCase().replace(/_/g, " ")} on your Seerr, so nothing was requested.`;
   }
   if (message.startsWith("LLM_UNAVAILABLE")) {
     return "No exact title matched and the language-model fallback is not configured. Try search_media with the exact title.";
@@ -125,7 +136,12 @@ function explain(error: unknown, accountUrl: string): string {
   if (message.startsWith("Semantic resolution failed")) {
     return "Could not work out which title was meant. Try search_media with a more specific title, or add the year.";
   }
-  return message;
+  // Anything else — a model provider outage, a rejected provider key, a guard
+  // refusal — may carry a URL or an upstream response body in its message.
+  // That goes to the log, where the operator can read it, and not to the
+  // assistant, where the person would.
+  log(error);
+  return "Something went wrong on SeerrSense's side. Try again in a moment.";
 }
 
 /**
@@ -138,7 +154,12 @@ function explain(error: unknown, accountUrl: string): string {
  * database-backed store to count against — the daily resolve ceiling then
  * simply does not apply.
  */
-export function createSeerrSenseMcpServer(scopes?: string[], tenant?: Tenant, budget?: McpBudget) {
+export function createSeerrSenseMcpServer(
+  scopes?: string[],
+  tenant?: Tenant,
+  budget?: McpBudget,
+  log: (error: unknown) => void = (error) => console.error("tool failed", error),
+) {
   const mcpServer = new McpServer({
     name: "SeerrSense",
     title: "SeerrSense",
@@ -153,7 +174,7 @@ export function createSeerrSenseMcpServer(scopes?: string[], tenant?: Tenant, bu
   });
   const failed = (error: unknown) => ({
     isError: true as const,
-    content: [{ type: "text" as const, text: explain(error, accountUrl) }],
+    content: [{ type: "text" as const, text: explain(error, accountUrl, log) }],
   });
   const ok = <T extends Record<string, unknown>>(structuredContent: T) => ({
     content: [{ type: "text" as const, text: JSON.stringify(structuredContent, null, 2) }],

@@ -2,7 +2,7 @@ import { test, expect, beforeAll } from "vitest";
 import { readFileSync } from "node:fs";
 import Fastify from "fastify";
 import { buildServer } from "../src/api/server.js";
-import { seerrClient } from "../src/providers/seerr/client.js";
+import { seerrClient, SeerrAccessChallengeError, SeerrUnreachableError } from "../src/providers/seerr/client.js";
 
 // Mock the network calls
 import { vi } from "vitest";
@@ -155,7 +155,8 @@ test("every tool is annotated the way the directories require", async () => {
     expect(byName[name].annotations.destructiveHint, name).toBe(false);
   }
   expect(byName.request_media.annotations.readOnlyHint).toBe(false);
-  expect(byName.request_media.annotations.destructiveHint).toBe(true);
+  // Additive, not destructive: it files a request and removes nothing.
+  expect(byName.request_media.annotations.destructiveHint).toBe(false);
   expect(byName.request_media.annotations.idempotentHint).toBe(false);
 });
 
@@ -221,6 +222,74 @@ test("tool results carry structured content and no account details", async () =>
   });
   expect(JSON.stringify(request.result)).not.toContain("owner@example.com");
   expect(JSON.stringify(request.result)).not.toContain("createdAt");
+});
+
+// A per-user Seerr answers through fetchUntrusted, which folds every non-2xx
+// into SeerrUnreachableError with the status on the side. A rotated key must
+// come out as "update the key", not as "the host is down".
+test("a rejected key and an Access challenge from a per-user Seerr are named", async () => {
+  const call = async (id: number) => {
+    const response = await app.inject({
+      method: "POST",
+      url: "/mcp",
+      headers: { accept: "application/json, text/event-stream", authorization: "Bearer secret123" },
+      payload: { jsonrpc: "2.0", id, method: "tools/call", params: { name: "search_media", arguments: { query: "x" } } },
+    });
+    return JSON.parse(response.payload.match(/data: ({.*})/)![1]).result;
+  };
+
+  householdSeerr.search.mockRejectedValueOnce(new SeerrUnreachableError("could not reach that Seerr", 401));
+  const rejected = await call(9);
+  expect(rejected.isError).toBe(true);
+  expect(rejected.content[0].text).toMatch(/rejected the API key/);
+  expect(rejected.content[0].text).toMatch(/account/);
+
+  householdSeerr.search.mockRejectedValueOnce(new SeerrUnreachableError("could not reach that Seerr"));
+  const down = await call(10);
+  expect(down.content[0].text).toMatch(/could not reach your Seerr/);
+
+  householdSeerr.search.mockRejectedValueOnce(new SeerrUnreachableError("could not reach that Seerr", 503));
+  const failing = await call(11);
+  expect(failing.content[0].text).toMatch(/answered with an error \(503\)/);
+
+  householdSeerr.search.mockRejectedValueOnce(new SeerrAccessChallengeError());
+  const access = await call(12);
+  expect(access.content[0].text).toMatch(/Cloudflare Access/);
+  expect(access.content[0].text).toMatch(/account/);
+});
+
+// Anything unrecognised may carry a provider URL or an upstream body; the
+// assistant gets a generic sentence and the detail goes to the log.
+test("an unknown failure is not relayed to the caller", async () => {
+  householdSeerr.search.mockRejectedValueOnce(new Error("APICallError: https://api.provider.example/v1 answered 500: {\"secret\":true}"));
+  const response = await app.inject({
+    method: "POST",
+    url: "/mcp",
+    headers: { accept: "application/json, text/event-stream", authorization: "Bearer secret123" },
+    payload: { jsonrpc: "2.0", id: 13, method: "tools/call", params: { name: "search_media", arguments: { query: "x" } } },
+  });
+  const body = JSON.parse(response.payload.match(/data: ({.*})/)![1]);
+  expect(body.result.isError).toBe(true);
+  expect(body.result.content[0].text).toMatch(/Something went wrong on SeerrSense's side/);
+  expect(body.result.content[0].text).not.toContain("api.provider.example");
+});
+
+test("a TV request keeps the seasons asked for when Seerr returns none", async () => {
+  householdSeerr.getMedia.mockResolvedValueOnce({
+    provider: "tmdb", providerId: 95396, mediaType: "tv", title: "Severance", status: "UNKNOWN",
+  });
+  householdSeerr.requestMedia.mockResolvedValueOnce({ id: 43, status: 4, seasons: [] });
+  const response = await app.inject({
+    method: "POST",
+    url: "/mcp",
+    headers: { accept: "application/json, text/event-stream", authorization: "Bearer secret123" },
+    payload: {
+      jsonrpc: "2.0", id: 14, method: "tools/call",
+      params: { name: "request_media", arguments: { mediaType: "tv", tmdbId: 95396, seasons: [3] } },
+    },
+  });
+  const body = JSON.parse(response.payload.match(/data: ({.*})/)![1]);
+  expect(body.result.structuredContent).toEqual({ requestId: 43, requestStatus: "FAILED", mediaType: "tv", tmdbId: 95396, seasons: [3] });
 });
 
 // Errors are for the person, not the operator: an outage on the Seerr side
