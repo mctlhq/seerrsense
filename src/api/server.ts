@@ -54,6 +54,7 @@ const PUBLIC_PREFIXES = [
   "/terms",
   "/support",
   "/icon-512.png",
+  "/robots.txt",
   // The browser has no token yet when it finishes its own PKCE exchange here;
   // the route is guarded by the authorization code and verifier it must present.
   "/account/session",
@@ -84,6 +85,27 @@ function isSessionRoute(url: string): boolean {
   const path = url.split("?")[0];
   return SESSION_PREFIXES.some((prefix) =>
     prefix.endsWith("/") ? path.startsWith(prefix) : path === prefix,
+  );
+}
+
+/**
+ * An undeclared path, fetched the way a browser fetches a page: a GET or HEAD,
+ * no token, and `Accept: text/html`. The Accept check is what separates a
+ * person at a mistyped address from everything else that also arrives without
+ * a token — curl, a prober, a JSON fetch() at a wrong /api/v1 path, an MCP
+ * client opening its GET stream at /mcp/ — none of which ask for HTML, and all
+ * of which keep the 401 and its WWW-Authenticate challenge.
+ */
+function isBrowserNotFound(request: {
+  is404: boolean;
+  method: string;
+  headers: { authorization?: string; accept?: string };
+}): boolean {
+  return (
+    request.is404 &&
+    (request.method === "GET" || request.method === "HEAD") &&
+    !request.headers.authorization &&
+    (request.headers.accept ?? "").includes("text/html")
   );
 }
 
@@ -330,10 +352,20 @@ export function buildServer(
   // Registered on the root instance (not inside the nested plugin below) on
   // purpose: Fastify's default not-found handler runs through whichever
   // onRequest/preHandler hooks are present at the ROOT level at boot time, so
-  // an undeclared path still meets this gate and answers 401 rather than
-  // leaking a 404 that would tell an unauthenticated caller a route exists.
+  // an undeclared path still meets this gate. Programmatic callers without a
+  // token get the same 401 for a declared and an undeclared path, which keeps
+  // the route table unprobeable to them.
   fastify.addHook("preHandler", async (request, reply) => {
     if (isPublic(request.url) || isSessionRoute(request.url)) return;
+    // The one deliberate exception: a browser navigating to a mistyped
+    // address gets the 404 page below instead of a JSON token challenge. This
+    // does let a browser tell a declared route (401) from an undeclared one
+    // (404); the routes are in a public repository, and a person reading an
+    // error page is who the trade favours. Anything that does not ask for
+    // HTML — a POST, a JSON fetch, an MCP client's GET stream, anything with a
+    // token — still meets the gate, so an MCP client with the endpoint
+    // slightly wrong keeps receiving the challenge that makes it start OAuth.
+    if (isBrowserNotFound(request)) return;
 
     let auth: AuthInfo;
     try {
@@ -479,6 +511,19 @@ export function buildServer(
   }
   fastify.get("/favicon.svg", async (_request, reply) => reply.type("image/svg+xml").sendFile("favicon.svg"));
   fastify.get("/og.png", async (_request, reply) => reply.type("image/png").sendFile("og.png"));
+  fastify.get("/robots.txt", async (_request, reply) =>
+    reply.type("text/plain; charset=utf-8").sendFile("robots.txt"),
+  );
+  // What a browser gets at an address that is not a page (see the auth gate
+  // for how it arrives here). Anything else that reaches this handler has
+  // already passed the gate with a valid token, so it is a client asking for a
+  // route that does not exist: a JSON 404, no page.
+  fastify.setNotFoundHandler(async (request, reply) => {
+    if (isBrowserNotFound(request)) {
+      return reply.status(404).type("text/html; charset=utf-8").sendFile("404.html");
+    }
+    return reply.status(404).send({ error: "not found" });
+  });
 
   fastify.get("/health", async () => {
     return { status: "ok" };

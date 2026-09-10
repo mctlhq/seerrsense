@@ -3,8 +3,13 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
+<!-- The theme choice is applied before the first paint, from localStorage,
+     so a visitor who chose light on a dark-preferring system never sees the
+     dark page flash on a navigation. This page loads no other script for it. -->
+<script>try{var t=localStorage.getItem("seerrsense-theme");if(t==="light"||t==="dark")document.documentElement.setAttribute("data-theme",t)}catch(e){}</script>
 <title>Signing in — SeerrSense</title>
 <meta name="robots" content="noindex">
+<link rel="icon" type="image/svg+xml" href="/favicon.svg">
 <link rel="stylesheet" href="/assets/tokens.css">
 <link rel="stylesheet" href="/assets/components.css">
 <style>main { max-width: 460px; margin: 0 auto; padding: 96px 24px; }</style>
@@ -15,6 +20,9 @@
   <h2 id="message">Finishing sign-in…</h2>
   <p class="lead" id="detail">One moment.</p>
 </main>
+<!-- No site.js here: it only wires controls this page does not have, and the
+     inline snippet in <head> already applied the theme. This page carries the
+     authorization code in its address; it loads nothing it does not need. -->
 <script>
 (function () {
   // The PKCE verifier never left the browser, so the exchange is finished from

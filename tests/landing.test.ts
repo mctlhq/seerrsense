@@ -1,3 +1,4 @@
+import { readFileSync } from "node:fs";
 import { describe, it, expect, beforeAll, vi } from "vitest";
 import { buildServer } from "../src/api/server.js";
 
@@ -111,25 +112,155 @@ describe("landing page", () => {
   });
 
   it("derives the endpoint from the origin instead of hardcoding it", async () => {
+    const script = await app.inject({ method: "GET", url: "/assets/site.js" });
+    expect(script.statusCode).toBe(200);
+    expect(script.payload).toContain('window.location.origin + "/mcp"');
     const { payload } = await app.inject({ method: "GET", url: "/" });
-    expect(payload).toContain('window.location.origin + "/mcp"');
+    expect(payload).toContain('<script src="/assets/site.js"></script>');
   });
 
-  it("never answers an undeclared path with the page", async () => {
-    // No catch-all: an unknown path is refused, not served the landing page.
-    // A missing asset 404s inside the assets prefix; everything else outside
-    // the public list meets the token gate.
-    const cases: Array<[string, number]> = [
-      ["/not-a-page", 401],
-      ["/index.html", 401],
-      ["/api/v1/unknown", 401],
-      ["/assets/missing.css", 404],
-    ];
-    for (const [path, status] of cases) {
-      const response = await app.inject({ method: "GET", url: path });
-      expect(response.statusCode, path).toBe(status);
+  it("answers a browser at an unknown address with the 404 page, not the landing page", async () => {
+    // No catch-all: an unknown path is never served the landing page. A plain
+    // GET without a token — how a person arrives at a mistyped address — gets
+    // an HTML 404 that links the real pages; a missing asset 404s inside the
+    // assets prefix.
+    const browser = { accept: "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8" };
+    for (const path of ["/not-a-page", "/index.html", "/privacy/", "/api/v1/unknown", "/docs"]) {
+      const response = await app.inject({ method: "GET", url: path, headers: browser });
+      expect(response.statusCode, path).toBe(404);
+      expect(response.headers["content-type"], path).toContain("text/html");
+      expect(response.payload, path).toContain("<title>Page not found");
       expect(response.payload, path).not.toContain("<title>SeerrSense");
+      expect(response.payload, path).toContain('href="/support"');
     }
+    const asset = await app.inject({ method: "GET", url: "/assets/missing.css" });
+    expect(asset.statusCode).toBe(404);
+    expect(asset.payload).not.toContain("<title>SeerrSense");
+  });
+
+  const browserAccept = { accept: "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8" };
+
+  it("keeps the token challenge for anything that is not a browser at a page", async () => {
+    // An MCP client with the endpoint slightly wrong POSTs, or carries a token;
+    // both must still meet the gate and its WWW-Authenticate challenge, which is
+    // what makes the client start OAuth rather than fail on a 404.
+    const post = await app.inject({ method: "POST", url: "/mcp.", payload: {} });
+    expect(post.statusCode).toBe(401);
+    expect(post.headers["www-authenticate"]).toContain("Bearer");
+    // The browser test is Accept: text/html, not merely "a GET without a
+    // token": curl, a prober, a JSON fetch() at a mistyped path and an MCP
+    // client's GET stream at /mcp/ all arrive without a token too, and must get
+    // the same 401 for an undeclared path as for a declared one, so that an
+    // anonymous caller cannot tell the two apart.
+    for (const [path, accept] of [
+      ["/not-a-page", "application/json"],
+      ["/api/v1/searchx", "*/*"],
+      ["/mcp/", "text/event-stream"],
+    ] as const) {
+      const response = await app.inject({ method: "GET", url: path, headers: { accept } });
+      expect(response.statusCode, `${path} ${accept}`).toBe(401);
+      expect(response.headers["www-authenticate"], path).toContain("Bearer");
+      expect(response.json().error, path).toBe("invalid_token");
+    }
+    const noAccept = await app.inject({ method: "GET", url: "/not-a-page" });
+    expect(noAccept.statusCode).toBe(401);
+    // And the other conjunct: a DECLARED gated route asked for as HTML, with no
+    // token, is still refused. Only an undeclared path may skip the gate; if
+    // is404 were dropped from the predicate, a browser could open the API and
+    // the MCP endpoint without a token.
+    for (const path of ["/api/v1/search?query=x", "/mcp"]) {
+      const response = await app.inject({ method: "GET", url: path, headers: browserAccept });
+      expect(response.statusCode, path).toBe(401);
+      expect(response.headers["www-authenticate"], path).toContain("Bearer");
+    }
+    const badToken = await app.inject({ method: "GET", url: "/not-a-page", headers: { authorization: "Bearer nope" } });
+    expect(badToken.statusCode).toBe(401);
+    expect(badToken.json().error).toBe("invalid_token");
+    // A valid token at a route that does not exist is a 404 for a client, not a page.
+    const goodToken = await app.inject({ method: "GET", url: "/api/v1/unknown", headers: { authorization: "Bearer secret123" } });
+    expect(goodToken.statusCode).toBe(404);
+    expect(goodToken.headers["content-type"]).toContain("application/json");
+    expect(goodToken.json()).toEqual({ error: "not found" });
+  });
+
+  it("serves robots.txt without a token and keeps crawlers off the endpoints", async () => {
+    const response = await app.inject({ method: "GET", url: "/robots.txt" });
+    expect(response.statusCode).toBe(200);
+    expect(response.headers["content-type"]).toContain("text/plain");
+    expect(response.payload).toContain("Allow: /");
+    for (const path of ["/mcp", "/api/", "/oauth/", "/account"]) {
+      expect(response.payload).toContain(`Disallow: ${path}`);
+    }
+  });
+
+  it("gives every public page the same header, fonts, theme toggle and contact", async () => {
+    // The inner pages used to be a second site: system font, no logo, no theme
+    // toggle, a different set of links on each. One header and one footer now,
+    // so a theme chosen on the landing page is what /account renders, and every
+    // page reaches every other page.
+    const pages = ["/", "/account", "/privacy", "/terms", "/support"];
+    for (const path of pages) {
+      const { payload } = await app.inject({ method: "GET", url: path });
+      expect(payload, path).toContain("fonts.googleapis.com/css2?family=Onest");
+      expect(payload, path).toContain('class="brand-mark"');
+      expect(payload, path).toMatch(/<button[^>]*id="theme-toggle"[^>]*hidden/);
+      expect(payload, path).toContain('<script src="/assets/site.js"></script>');
+      // The stored theme is applied inline in <head>, before the stylesheets,
+      // so the choice is on the first paint rather than after site.js arrives.
+      const head = payload.slice(0, payload.indexOf("</head>"));
+      const boot = head.indexOf('localStorage.getItem("seerrsense-theme")');
+      expect(boot, path).toBeGreaterThan(-1);
+      expect(boot, path).toBeLessThan(head.indexOf("<link rel=\"stylesheet\""));
+    }
+    // Wherever the sign-in rule is stated it is stated whole: Google's
+    // email_verified is refused outright (src/auth/google.ts), so "verified"
+    // is a condition, not a detail, and every page that states the rule must
+    // say it the same way. Privacy does not state the rule.
+    for (const path of ["/", "/account", "/terms", "/support"]) {
+      const { payload } = await app.inject({ method: "GET", url: path });
+      expect(payload, path).toMatch(/On this server, any(one with a)? Google\s+account (and|with) a verified\s+e-mail address can sign in/);
+      for (const link of pages) {
+        expect(payload, `${path} links ${link}`).toContain(`href="${link}"`);
+      }
+    }
+    for (const path of ["/privacy", "/terms", "/support"]) {
+      const { payload } = await app.inject({ method: "GET", url: path });
+      expect(payload, path).toContain("mailto:support@mctl.ai");
+      // The pages that state an address state only this one.
+      expect(payload, path).not.toContain("gmail.com");
+      expect(payload.match(/mailto:/g)?.length, path).toBe(1);
+    }
+    const css = await app.inject({ method: "GET", url: "/assets/components.css" });
+    expect(css.payload).toMatch(/\.btn\[hidden\]\s*\{\s*display: none;/);
+    // /account/callback is registered only with OAuth configured, which this
+    // suite is not, so the file is read from disk: an inject() here would
+    // assert against the 404 page and pass whatever the file said.
+    const callback = readFileSync(new URL("../public/account-callback.html", import.meta.url), "utf8");
+    expect(callback).toContain('localStorage.getItem("seerrsense-theme")');
+    expect(callback).not.toContain('<script src="/assets/site.js"');
+    // The account page's own <style> must come after the shared sheets, or
+    // its narrower column loses to main.page in components.css on source order.
+    const account = await app.inject({ method: "GET", url: "/account" });
+    expect(account.payload.indexOf("<style>")).toBeGreaterThan(account.payload.indexOf('href="/assets/components.css"'));
+    expect(account.payload).toContain("main.page { max-width: 560px; }");
+    // The theme icon names the theme that is showing, so it must be two icons
+    // swapped by the same rules the tokens use, not one moon for both.
+    const sheet = await app.inject({ method: "GET", url: "/assets/components.css" });
+    expect(sheet.payload).toMatch(/:root\[data-theme="light"\] \.theme-toggle \.icon-moon \{ display: none; \}/);
+    expect(sheet.payload).toContain("prefers-color-scheme: light");
+  });
+
+  it("describes the current ChatGPT path and names the model provider", async () => {
+    const { payload } = await app.inject({ method: "GET", url: "/" });
+    // "Plugins" is the pre-2026 name; a reader following it finds nothing.
+    expect(payload).not.toContain("Plugins");
+    expect(payload).toContain("Apps &amp; Connectors");
+    expect(payload).toContain("claude mcp add --transport http seerrsense");
+    // The REST surface exists but is undocumented; the page must not send a
+    // reader to a URL that answers 401.
+    expect(payload).not.toContain("/api/v1");
+    const privacy = await app.inject({ method: "GET", url: "/privacy" });
+    expect(privacy.payload).toContain("Nebius");
   });
 
   it("leaves the API and MCP endpoints behind the token gate", async () => {

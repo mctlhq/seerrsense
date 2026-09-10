@@ -3,12 +3,14 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
+<!-- The theme choice is applied before the first paint, from localStorage,
+     so a visitor who chose light on a dark-preferring system never sees the
+     dark page flash on a navigation. site.js (end of body) does the rest. -->
+<script>try{var t=localStorage.getItem("seerrsense-theme");if(t==="light"||t==="dark")document.documentElement.setAttribute("data-theme",t)}catch(e){}</script>
 <title>SeerrSense — natural-language media requests for Overseerr and Jellyseerr</title>
 <meta name="description" content="An MCP server in front of Overseerr or Jellyseerr. Ask an AI assistant for a film or series in plain language; SeerrSense resolves what you meant and requests it through your own Seerr.">
-
 <link rel="icon" type="image/svg+xml" href="/favicon.svg">
 <link rel="apple-touch-icon" href="/og.png">
-
 <meta property="og:type" content="website">
 <meta property="og:site_name" content="SeerrSense">
 <meta property="og:title" content="SeerrSense — natural-language media requests for Overseerr and Jellyseerr">
@@ -33,23 +35,28 @@
 <body>
 
 <header class="wrap topbar">
-  <span class="brand">
+  <a class="brand" href="/">
     <svg class="brand-mark" viewBox="0 0 32 32" aria-hidden="true">
       <circle cx="14" cy="14" r="7.5" fill="none" stroke="currentColor" stroke-width="2.5" style="color: var(--accent)"/>
       <path d="M19.5 19.5 L26 26" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" style="color: var(--accent)"/>
       <circle cx="14" cy="14" r="2.5" fill="currentColor" style="color: var(--accent)"/>
     </svg>
     SeerrSense
-  </span>
+  </a>
   <nav class="topbar-links">
-    <a href="#tools">Tools</a>
-    <a href="#setup">Setup</a>
+    <a href="/">Home</a>
     <a href="/account">Account</a>
+    <a href="/privacy">Privacy</a>
+    <a href="/terms">Terms</a>
     <a href="/support">Support</a>
-    <a href="https://github.com/mctlhq/seerrsense">GitHub</a>
+    <a class="link-github" href="https://github.com/mctlhq/seerrsense">GitHub</a>
     <button class="theme-toggle" id="theme-toggle" type="button" hidden aria-label="Switch between light and dark">
-      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
+      <svg class="icon-moon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
         <path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8z"/>
+      </svg>
+      <svg class="icon-sun" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true">
+        <circle cx="12" cy="12" r="4"/>
+        <path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/>
       </svg>
     </button>
   </nav>
@@ -80,8 +87,9 @@
 <section class="wrap" id="tools">
   <div class="section-head">
     <h2>MCP tools</h2>
-    <p>Four tools, one of which writes. The same operations are also available over REST at
-      <code>/api/v1</code>.</p>
+    <p>Four tools, one of which writes. The scope column is what the consent screen asks you
+      for: <code>seerr:read</code> covers the three lookups, <code>seerr:request</code> is the
+      only one that changes anything.</p>
   </div>
   <div class="table-scroll">
     <table>
@@ -137,22 +145,26 @@
     <p>Three steps, in order.</p>
   </div>
   <!-- Menu paths for claude.ai and ChatGPT verified against vendor documentation
-       on 2026-09-09; both products change their settings layout without notice,
+       on 2026-09-11; both products change their settings layout without notice,
        so treat this as approximate if it has been a while. -->
   <ol class="steps">
     <li><strong>Add the connector.</strong> Paste this endpoint into your assistant:
       <code class="mcp-url-slot">https://seerrsense.mctl.ai/mcp</code>
       <br>In claude.ai: <em>Customize → Connectors → “+” → Add custom connector</em>, paste the URL,
       then <em>Add</em>.
-      <br>In ChatGPT: <em>Settings → Security and login → Developer mode</em>, then
-      <em>Plugins → “+”</em>, and create an app with the URL.
+      <br>In ChatGPT: <em>Settings → Apps &amp; Connectors → Advanced settings → Developer mode</em>,
+      then back in <em>Apps &amp; Connectors → Create</em>, paste the URL as the connector URL.
+      <br>In Claude Code or another MCP client, point it at the same URL over HTTP, for example
+      <code>claude mcp add --transport http seerrsense https://seerrsense.mctl.ai/mcp</code>.
+      On this server, any Google account with a verified e-mail address can sign in.
     </li>
     <li><strong>Sign in with Google.</strong> Happens automatically on the first <em>Connect</em>. One
       consent screen names the client and what it is being granted. There is nothing to copy anywhere.
     </li>
     <li><strong>Attach your Seerr.</strong> Open <a href="/account">/account</a> and enter your
       Overseerr or Jellyseerr address and its API key (<em>Settings, then General, then API Key</em>).
-      If that Seerr sits behind Cloudflare Access, two more fields appear for the service token. The
+      If that Seerr sits behind Cloudflare Access, enter its service token in the
+      <em>CF-Access-Client-Id</em> and <em>CF-Access-Client-Secret</em> fields. The
       page tests the credentials against your instance before saving them. Skipping this step is
       fine for now: the tools will say so and point you back at <a href="/account">/account</a>.
     </li>
@@ -178,9 +190,10 @@
     </details>
     <details class="faq-item">
       <summary>Does a language model see my library?</summary>
-      <p>Only the phrase you typed is sent, and only when the ordinary search paths fail. The model
-        proposes titles, people and years; it never returns provider ids, and every candidate is
-        verified against Seerr before you see it.</p>
+      <p>Only the phrase you typed is sent, and only when the ordinary search paths fail. It goes to
+        Nebius, the model provider this server is configured with, running an open-weights Qwen
+        model. The model proposes titles, people and years; it never returns provider ids, and
+        every candidate is verified against Seerr before you see it.</p>
     </details>
   </div>
 </section>
@@ -190,56 +203,10 @@
 <footer class="wrap">
   <div class="footer-row">
     <span>SeerrSense — part of the <a href="https://mctl.ai">mctl</a> platform.</span>
-    <span><a href="/privacy">Privacy</a> · <a href="/terms">Terms</a> · <a href="/support">Support</a> · <a href="https://github.com/mctlhq/seerrsense">Source</a> · <a href="https://github.com/mctlhq/seerrsense#readme">Self-host it</a></span>
+    <span><a href="/privacy">Privacy</a> · <a href="/terms">Terms</a> · <a href="/support">Support</a> · <a href="https://github.com/mctlhq/seerrsense">Source and self-hosting</a></span>
   </div>
 </footer>
 
-<script>
-(function () {
-  var root = document.documentElement;
-
-  // Theme. Dark is the default in CSS, the system preference applies to a
-  // visitor who has never chosen, and an explicit choice outlives both.
-  var stored = null;
-  try { stored = localStorage.getItem("seerrsense-theme"); } catch (e) {}
-  if (stored === "light" || stored === "dark") root.setAttribute("data-theme", stored);
-
-  var toggle = document.getElementById("theme-toggle");
-  if (toggle) {
-    toggle.hidden = false;
-    toggle.addEventListener("click", function () {
-      var current = root.getAttribute("data-theme");
-      if (!current) {
-        current = window.matchMedia("(prefers-color-scheme: light)").matches ? "light" : "dark";
-      }
-      var next = current === "dark" ? "light" : "dark";
-      root.setAttribute("data-theme", next);
-      try { localStorage.setItem("seerrsense-theme", next); } catch (e) {}
-    });
-  }
-
-  // The endpoint is whatever host this page was served from, so promoting a
-  // domain needs no change here.
-  var url = window.location.origin + "/mcp";
-  var target = document.getElementById("mcp-url");
-  if (target) target.textContent = url;
-  Array.prototype.forEach.call(document.querySelectorAll(".mcp-url-slot"), function (slot) {
-    slot.textContent = url;
-  });
-
-  var copy = document.getElementById("copy-url");
-  if (copy && navigator.clipboard) {
-    copy.addEventListener("click", function () {
-      navigator.clipboard.writeText(url).then(function () {
-        copy.textContent = copy.dataset.done;
-        setTimeout(function () { copy.textContent = copy.dataset.idle; }, 1600);
-      });
-    });
-  } else if (copy) {
-    copy.hidden = true;
-  }
-})();
-</script>
-
+<script src="/assets/site.js"></script>
 </body>
 </html>
