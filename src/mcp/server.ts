@@ -12,6 +12,7 @@ import { SeerrAccessChallengeError, SeerrUnreachableError } from "../providers/s
 import type { AuthStore } from "../auth/store.js";
 import { config } from "../core/config.js";
 import { SCOPE_REQUEST } from "../auth/config.js";
+import { describeError } from "../core/errors.js";
 
 export interface McpBudget {
   store: AuthStore;
@@ -172,41 +173,6 @@ export function explain(error: unknown, ctx: ExplainContext, log: (error: unknow
   // assistant, where the person would.
   log(error);
   return "Something went wrong on SeerrSense's side. Try again in a moment.";
-}
-
-/** What a log line may carry of an error: its identity, never its payload. */
-export interface DescribedError {
-  name: string;
-  message: string;
-  stack?: string;
-  cause?: DescribedError;
-}
-
-/**
- * What a failed tool call is allowed to leave in the log: the error's class,
- * its message, where it was thrown, and the same for the error that caused
- * it — a `fetch failed` says nothing without its ENOTFOUND underneath. Not
- * the object itself: the AI SDK's APICallError carries the request body it
- * sent, which is the person's own resolve_media query, and pino's error
- * serializer would copy every such enumerable field into the line.
- *
- * Runs inside a tool's catch, so it must not throw itself: `String()` of a
- * symbol or of a prototype-less object does, and would turn a handled
- * failure into an MCP internal error.
- */
-export function describeError(error: unknown, depth = 0): DescribedError {
-  if (error instanceof Error) {
-    const described: DescribedError = { name: error.name, message: error.message, stack: error.stack };
-    if (error.cause !== undefined && depth < 3) described.cause = describeError(error.cause, depth + 1);
-    return described;
-  }
-  let message: string;
-  try {
-    message = typeof error === "string" ? error : String(error);
-  } catch {
-    message = "an error that could not be printed";
-  }
-  return { name: "Error", message };
 }
 
 /**

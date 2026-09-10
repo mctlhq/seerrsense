@@ -7,7 +7,7 @@ import type { AuthStore } from "../auth/store.js";
 import { SeerrAccessChallengeError, SeerrClient, SeerrUnreachableError } from "../providers/seerr/client.js";
 import { assertPublicSeerrUrl, BlockedAddressError } from "../providers/seerr/guard.js";
 import type { TenantResolver } from "../providers/seerr/tenants.js";
-import { describeError } from "../mcp/server.js";
+import { describeError } from "../core/errors.js";
 
 const ConnectionSchema = z.object({
   seerrUrl: z.string().url().max(2048),

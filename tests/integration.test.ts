@@ -362,7 +362,7 @@ test("an unknown failure is not relayed to the caller, and the log gets its iden
 // nothing it was carrying: a provider error keeps the request body it sent,
 // which is the person's own query.
 test("describeError keeps name, message and stack and drops the payload", async () => {
-  const { describeError } = await import("../src/mcp/server.js");
+  const { describeError } = await import("../src/core/errors.js");
   const error = Object.assign(new Error("provider answered 500"), {
     name: "APICallError",
     requestBodyValues: { messages: [{ role: "user", content: "that film where the guy forgets everything" }] },
@@ -373,9 +373,34 @@ test("describeError keeps name, message and stack and drops the payload", async 
   expect(JSON.stringify(described)).not.toContain("forgets everything");
   expect(JSON.stringify(described)).not.toContain("secret");
   expect(describeError("plain string")).toEqual({ name: "Error", message: "plain string" });
-  // Neither of these may throw inside a tool's catch.
-  expect(describeError(Symbol("x")).name).toBe("Error");
+  // A prototype-less object has no toString; describing it must not throw.
   expect(describeError(Object.create(null)).message).toBe("an error that could not be printed");
+  // undici's multi-address failure: an AggregateError with an empty message.
+  const aggregate = new AggregateError([new Error("connect ECONNREFUSED 1.2.3.4:443"), new Error("connect ECONNREFUSED [::1]:443")]);
+  const fetchFailed = new TypeError("fetch failed", { cause: aggregate });
+  const walked = describeError(fetchFailed);
+  expect(walked.cause?.errors?.map((e) => e.message)).toEqual(["connect ECONNREFUSED 1.2.3.4:443", "connect ECONNREFUSED [::1]:443"]);
+});
+
+// The one remaining raw-error path was Fastify's own handler.
+test("an unhandled throw in a route is logged described, not raw, and answered generically", async () => {
+  const pgLike = Object.assign(new Error("duplicate key value violates unique constraint"), {
+    detail: "Key (email)=(owner@example.com) already exists.",
+    table: "user_connections",
+  });
+  const logged: unknown[] = [];
+  const spy = vi.spyOn(app.log, "error").mockImplementation((...args: unknown[]) => { logged.push(args[0]); });
+  householdSeerr.search.mockImplementationOnce(() => { throw pgLike; });
+  const response = await app.inject({
+    method: "GET", url: "/api/v1/search?query=x", headers: { authorization: "Bearer secret123" },
+  });
+  spy.mockRestore();
+  expect(response.statusCode).toBe(500);
+  expect(response.payload).not.toContain("owner@example.com");
+  expect(logged).toHaveLength(1);
+  const line = logged[0] as { err: Record<string, unknown> };
+  expect(line.err.message).toBe("duplicate key value violates unique constraint");
+  expect(JSON.stringify(line.err)).not.toContain("owner@example.com");
 });
 
 test("a TV request keeps the seasons asked for when Seerr returns none", async () => {

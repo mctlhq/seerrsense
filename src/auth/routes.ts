@@ -1,5 +1,5 @@
 import { createHmac } from "node:crypto";
-import { describeError } from "../mcp/server.js";
+import { describeError } from "../core/errors.js";
 import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 import { z } from "zod";
 import { ClientResolutionError, ClientResolver, isAllowedRedirectUri } from "./clients.js";

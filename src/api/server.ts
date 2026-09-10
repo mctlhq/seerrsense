@@ -5,7 +5,8 @@ import fastifyCookie from "@fastify/cookie";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 import Fastify, { type FastifyRequest } from "fastify";
-import { createSeerrSenseMcpServer, describeError } from "../mcp/server.js";
+import { createSeerrSenseMcpServer } from "../mcp/server.js";
+import { describeError } from "../core/errors.js";
 import { createDefaultSeerrClient } from "../providers/seerr/client.js";
 import { notConnectedMessage, TenantResolver, type Tenant } from "../providers/seerr/tenants.js";
 import { MediaParamsSchema, RequestBodySchema } from "../core/media.js";
@@ -411,6 +412,22 @@ export function buildServer(
   // single-page app: a path that is not declared here is not answered with the
   // page. It meets the auth gate instead and is refused, since everything
   // outside PUBLIC_PREFIXES needs a token.
+  // An unhandled throw out of any route would otherwise reach Fastify's
+  // default handler, which logs the raw error through pino's serializer — the
+  // one path the explicit call sites no longer take. A `pg` error carries
+  // `detail` with row values, which is exactly what must not be written down.
+  // Client errors (a 429 from the limiter, a 4xx a plugin raised) keep their
+  // status and message; anything else is a 500 with nothing of the cause.
+  fastify.setErrorHandler((error: Error & { statusCode?: number }, request, reply) => {
+    const status = error.statusCode && error.statusCode >= 400 && error.statusCode < 500 ? error.statusCode : 500;
+    // The app logger rather than request.log: the same line, with the
+    // request id carried explicitly, and one logger for a test to observe.
+    fastify.log[status >= 500 ? "error" : "warn"]({ reqId: request.id, err: describeError(error) }, "request failed");
+    return reply.status(status).send({
+      error: status >= 500 ? "internal error" : error.message,
+    });
+  });
+
   const publicDir = join(dirname(fileURLToPath(import.meta.url)), "..", "..", "public");
   fastify.register(fastifyStatic, { root: publicDir, serve: false });
   fastify.register(fastifyStatic, {
