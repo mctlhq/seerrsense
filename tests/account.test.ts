@@ -731,8 +731,8 @@ describe("deleting the account", () => {
     await app.ready();
     const cookie = await signIn(app, ALLOWED_EMAIL);
     expect((await app.inject({ method: "DELETE", url: "/api/v1/account", headers: { cookie } })).statusCode).toBe(200);
-    expect(order.indexOf("revokeSubjectSessions")).toBeLessThan(order.indexOf("deleteSubject"));
-    expect(order.indexOf("revokeSession")).toBeLessThan(order.indexOf("deleteSubject"));
+    // Exact, so a removed call fails too: indexOf(-1) would satisfy "less than".
+    expect(order).toEqual(["revokeSubjectSessions", "revokeSession", "deleteSubject"]);
     await app.close();
   });
 

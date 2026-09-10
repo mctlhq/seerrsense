@@ -391,10 +391,10 @@ export function buildServer(
       await authStore.purgeExpired();
       await authStore.purgeResolveUsage(purgeResolveUsageBefore());
       purgeTimer = setInterval(() => {
-        authStore.purgeExpired().catch((error) => fastify.log.warn({ err: error }, "OAuth purge failed"));
+        authStore.purgeExpired().catch((error) => fastify.log.warn({ err: describeError(error) }, "OAuth purge failed"));
         authStore
           .purgeResolveUsage(purgeResolveUsageBefore())
-          .catch((error) => fastify.log.warn({ err: error }, "resolve usage purge failed"));
+          .catch((error) => fastify.log.warn({ err: describeError(error) }, "resolve usage purge failed"));
       }, 60 * 60 * 1000);
       purgeTimer.unref();
     });

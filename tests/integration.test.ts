@@ -324,8 +324,18 @@ test("get_media and resolve_media answer within their output schemas", async () 
 
 // Anything unrecognised may carry a provider URL or an upstream body; the
 // assistant gets a generic sentence and the detail goes to the log.
-test("an unknown failure is not relayed to the caller", async () => {
-  householdSeerr.search.mockRejectedValueOnce(new Error("APICallError: https://api.provider.example/v1 answered 500: {\"secret\":true}"));
+test("an unknown failure is not relayed to the caller, and the log gets its identity only", async () => {
+  const failure = Object.assign(new Error("APICallError: https://api.provider.example/v1 answered 500"), {
+    name: "APICallError",
+    requestBodyValues: { messages: [{ role: "user", content: "that film where the guy forgets everything" }] },
+    responseBody: "{\"secret\":true}",
+    cause: new Error("getaddrinfo ENOTFOUND api.provider.example"),
+  });
+  householdSeerr.search.mockRejectedValueOnce(failure);
+  const logged: unknown[] = [];
+  const spy = vi.spyOn(app.log, "error").mockImplementation((...args: unknown[]) => {
+    logged.push(args[0]);
+  });
   const response = await app.inject({
     method: "POST",
     url: "/mcp",
@@ -336,6 +346,16 @@ test("an unknown failure is not relayed to the caller", async () => {
   expect(body.result.isError).toBe(true);
   expect(body.result.content[0].text).toMatch(/Something went wrong on SeerrSense's side/);
   expect(body.result.content[0].text).not.toContain("api.provider.example");
+
+  // What reached the logger: name, message, stack and cause — not the
+  // request body, not the response body.
+  spy.mockRestore();
+  expect(logged).toHaveLength(1);
+  const line = logged[0] as { err: Record<string, unknown> };
+  expect(line.err).toMatchObject({ name: "APICallError", cause: { message: "getaddrinfo ENOTFOUND api.provider.example" } });
+  expect(Object.keys(line.err).sort()).toEqual(["cause", "message", "name", "stack"]);
+  expect(JSON.stringify(line.err)).not.toContain("forgets everything");
+  expect(JSON.stringify(line.err)).not.toContain("secret");
 });
 
 // The log line for an unexplained failure carries the error's identity and
@@ -353,6 +373,9 @@ test("describeError keeps name, message and stack and drops the payload", async 
   expect(JSON.stringify(described)).not.toContain("forgets everything");
   expect(JSON.stringify(described)).not.toContain("secret");
   expect(describeError("plain string")).toEqual({ name: "Error", message: "plain string" });
+  // Neither of these may throw inside a tool's catch.
+  expect(describeError(Symbol("x")).name).toBe("Error");
+  expect(describeError(Object.create(null)).message).toBe("an error that could not be printed");
 });
 
 test("a TV request keeps the seasons asked for when Seerr returns none", async () => {
