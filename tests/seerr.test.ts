@@ -203,6 +203,38 @@ describe("SeerrClient timeouts and retries", () => {
     expect(global.fetch).toHaveBeenCalledTimes(1);
   });
 
+  // The attached-Seerr path folds every transport failure into
+  // SeerrUnreachableError before the retry decision; a silence there must be
+  // retried too, and an answered error must not.
+  it("retries a silent read on the untrusted path as well", async () => {
+    const client = new SeerrClient({
+      baseUrl: "https://mine.example", apiKey: "key", untrusted: true, timeoutMs: 30,
+      lookup: async () => ["93.184.216.34"],
+    });
+    const body = JSON.stringify({ id: 1, mediaType: "movie", title: "Test", mediaInfo: { status: 5 } });
+    (global.fetch as any)
+      .mockImplementationOnce((_url: string, init: RequestInit) => hang(init.signal!))
+      .mockImplementationOnce(() => Promise.resolve({
+        ok: true, status: 200, headers: new Headers({ "content-type": "application/json" }), body: null,
+        text: async () => body,
+      }));
+    const result = await client.getMedia("movie", 1);
+    expect(result.status).toBe("AVAILABLE");
+    expect(global.fetch).toHaveBeenCalledTimes(2);
+    await client.close();
+  });
+
+  it("does not retry an untrusted read that was answered, even with a 5xx", async () => {
+    const client = new SeerrClient({
+      baseUrl: "https://mine.example", apiKey: "key", untrusted: true, timeoutMs: 30,
+      lookup: async () => ["93.184.216.34"],
+    });
+    (global.fetch as any).mockResolvedValue({ ok: false, status: 503, headers: new Headers(), body: null, text: async () => "" });
+    await expect(client.getMedia("movie", 1)).rejects.toMatchObject({ name: "SeerrUnreachableError", upstreamStatus: 503 });
+    expect(global.fetch).toHaveBeenCalledTimes(1);
+    await client.close();
+  });
+
   it("defaults the ceiling to SEERR_REQUEST_TIMEOUT_MS, 20 s", async () => {
     const { parseConfig } = await import("../src/core/config.js");
     expect(parseConfig({}).SEERR_REQUEST_TIMEOUT_MS).toBe(20_000);
