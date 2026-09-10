@@ -3,6 +3,10 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
+<!-- The theme choice is applied before the first paint, from localStorage,
+     so a visitor who chose light on a dark-preferring system never sees the
+     dark page flash on a navigation. site.js (end of body) does the rest. -->
+<script>try{var t=localStorage.getItem("seerrsense-theme");if(t==="light"||t==="dark")document.documentElement.setAttribute("data-theme",t)}catch(e){}</script>
 <title>SeerrSense — natural-language media requests for Overseerr and Jellyseerr</title>
 <meta name="description" content="An MCP server in front of Overseerr or Jellyseerr. Ask an AI assistant for a film or series in plain language; SeerrSense resolves what you meant and requests it through your own Seerr.">
 <link rel="icon" type="image/svg+xml" href="/favicon.svg">
@@ -152,7 +156,7 @@
       then back in <em>Apps &amp; Connectors → Create</em>, paste the URL as the connector URL.
       <br>In Claude Code or another MCP client, point it at the same URL over HTTP, for example
       <code>claude mcp add --transport http seerrsense https://seerrsense.mctl.ai/mcp</code>.
-      On this server, any Google account can sign in.
+      On this server, any Google account with a verified e-mail address can sign in.
     </li>
     <li><strong>Sign in with Google.</strong> Happens automatically on the first <em>Connect</em>. One
       consent screen names the client and what it is being granted. There is nothing to copy anywhere.

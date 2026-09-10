@@ -3,6 +3,10 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
+<!-- The theme choice is applied before the first paint, from localStorage,
+     so a visitor who chose light on a dark-preferring system never sees the
+     dark page flash on a navigation. site.js (end of body) does the rest. -->
+<script>try{var t=localStorage.getItem("seerrsense-theme");if(t==="light"||t==="dark")document.documentElement.setAttribute("data-theme",t)}catch(e){}</script>
 <title>Page not found — SeerrSense</title>
 <meta name="description" content="This address is not a SeerrSense page.">
 <meta name="robots" content="noindex">

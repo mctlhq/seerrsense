@@ -3,6 +3,10 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
+<!-- The theme choice is applied before the first paint, from localStorage,
+     so a visitor who chose light on a dark-preferring system never sees the
+     dark page flash on a navigation. site.js (end of body) does the rest. -->
+<script>try{var t=localStorage.getItem("seerrsense-theme");if(t==="light"||t==="dark")document.documentElement.setAttribute("data-theme",t)}catch(e){}</script>
 <title>Terms — SeerrSense</title>
 <meta name="description" content="The terms on which SeerrSense is offered: what it is, what is expected of you, and what is not promised.">
 <link rel="icon" type="image/svg+xml" href="/favicon.svg">
@@ -78,7 +82,7 @@
   </ul>
 
   <h2>Access</h2>
-  <p>On this server, anyone with a Google account can sign in; a self-hosted copy may limit
+  <p>On this server, anyone with a Google account and a verified e-mail address can sign in; a self-hosted copy may limit
     sign-in to listed accounts. Access can be withdrawn at any time, without
     notice, if the service is being misused or is discontinued. You can end it yourself at any
     time by deleting your account on the account page and removing the connector from your

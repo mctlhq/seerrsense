@@ -5,7 +5,10 @@
   var root = document.documentElement;
 
   // Dark is the default in CSS, the system preference applies to a visitor
-  // who has never chosen, and an explicit choice outlives both.
+  // who has never chosen, and an explicit choice outlives both. The inline
+  // script in <head> has already applied the stored choice before first
+  // paint; this repeats it so the toggle below starts from the same state
+  // even if that script was blocked.
   var stored = null;
   try { stored = localStorage.getItem("seerrsense-theme"); } catch (e) {}
   if (stored === "light" || stored === "dark") root.setAttribute("data-theme", stored);

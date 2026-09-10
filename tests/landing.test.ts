@@ -137,6 +137,8 @@ describe("landing page", () => {
     expect(asset.payload).not.toContain("<title>SeerrSense");
   });
 
+  const browserAccept = { accept: "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8" };
+
   it("keeps the token challenge for anything that is not a browser at a page", async () => {
     // An MCP client with the endpoint slightly wrong POSTs, or carries a token;
     // both must still meet the gate and its WWW-Authenticate challenge, which is
@@ -161,6 +163,15 @@ describe("landing page", () => {
     }
     const noAccept = await app.inject({ method: "GET", url: "/not-a-page" });
     expect(noAccept.statusCode).toBe(401);
+    // And the other conjunct: a DECLARED gated route asked for as HTML, with no
+    // token, is still refused. Only an undeclared path may skip the gate; if
+    // is404 were dropped from the predicate, a browser could open the API and
+    // the MCP endpoint without a token.
+    for (const path of ["/api/v1/search?query=x", "/mcp"]) {
+      const response = await app.inject({ method: "GET", url: path, headers: browserAccept });
+      expect(response.statusCode, path).toBe(401);
+      expect(response.headers["www-authenticate"], path).toContain("Bearer");
+    }
     const badToken = await app.inject({ method: "GET", url: "/not-a-page", headers: { authorization: "Bearer nope" } });
     expect(badToken.statusCode).toBe(401);
     expect(badToken.json().error).toBe("invalid_token");
@@ -193,6 +204,20 @@ describe("landing page", () => {
       expect(payload, path).toContain('class="brand-mark"');
       expect(payload, path).toMatch(/<button[^>]*id="theme-toggle"[^>]*hidden/);
       expect(payload, path).toContain('<script src="/assets/site.js"></script>');
+      // The stored theme is applied inline in <head>, before the stylesheets,
+      // so the choice is on the first paint rather than after site.js arrives.
+      const head = payload.slice(0, payload.indexOf("</head>"));
+      const boot = head.indexOf('localStorage.getItem("seerrsense-theme")');
+      expect(boot, path).toBeGreaterThan(-1);
+      expect(boot, path).toBeLessThan(head.indexOf("<link rel=\"stylesheet\""));
+    }
+    // Wherever the sign-in rule is stated it is stated whole: Google's
+    // email_verified is refused outright (src/auth/google.ts), so "verified"
+    // is a condition, not a detail, and every page that states the rule must
+    // say it the same way. Privacy does not state the rule.
+    for (const path of ["/", "/account", "/terms", "/support"]) {
+      const { payload } = await app.inject({ method: "GET", url: path });
+      expect(payload, path).toMatch(/On this server, any(one with a)? Google\s+account (and|with) a verified\s+e-mail address can sign in/);
       for (const link of pages) {
         expect(payload, `${path} links ${link}`).toContain(`href="${link}"`);
       }

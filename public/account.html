@@ -3,6 +3,10 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
+<!-- The theme choice is applied before the first paint, from localStorage,
+     so a visitor who chose light on a dark-preferring system never sees the
+     dark page flash on a navigation. site.js (end of body) does the rest. -->
+<script>try{var t=localStorage.getItem("seerrsense-theme");if(t==="light"||t==="dark")document.documentElement.setAttribute("data-theme",t)}catch(e){}</script>
 <title>Your Seerr — SeerrSense</title>
 <meta name="description" content="Sign in and attach your own Overseerr or Jellyseerr to SeerrSense.">
 <meta name="robots" content="noindex">
@@ -76,7 +80,7 @@
     <p class="lead">Sign in with Google first. You then enter the address and API key of your own
       Overseerr or Jellyseerr; the page tests them against your instance before saving anything,
       and SeerrSense searches and requests there from then on. On this server, any Google
-      account can sign in.</p>
+      account with a verified e-mail address can sign in.</p>
     <div class="row">
       <button class="btn btn-primary" id="sign-in" type="button">Continue with Google</button>
     </div>
