@@ -39,3 +39,31 @@ describe("householdEmails", () => {
     expect(settings.oauth?.householdEmails).toEqual(new Set(["owner@example.com", "second@example.com"]));
   });
 });
+
+describe("legacy token default", () => {
+  it("stays on when OAuth is not configured: it is the only way in", () => {
+    const settings = loadAuthSettings({}, "shared");
+    expect(settings.oauth).toBeUndefined();
+    expect(settings.legacyToken).toBe("shared");
+  });
+
+  it("turns off by itself once OAuth is configured", () => {
+    const settings = loadAuthSettings(BASE_ENV, "shared");
+    expect(settings.oauth).toBeDefined();
+    expect(settings.legacyToken).toBeUndefined();
+  });
+
+  it("with OAuth, is on only for the exact string 'true'", () => {
+    expect(loadAuthSettings({ ...BASE_ENV, SEERRSENSE_LEGACY_TOKEN_ENABLED: "true" }, "shared").legacyToken).toBe("shared");
+    for (const value of ["yes", "1", "TRUE", ""]) {
+      expect(loadAuthSettings({ ...BASE_ENV, SEERRSENSE_LEGACY_TOKEN_ENABLED: value }, "shared").legacyToken, value).toBeUndefined();
+    }
+  });
+
+  it("without OAuth, keeps the old rule: anything but 'false' is on", () => {
+    for (const value of ["yes", "1", "TRUE", "", "true"]) {
+      expect(loadAuthSettings({ SEERRSENSE_LEGACY_TOKEN_ENABLED: value }, "shared").legacyToken, value).toBe("shared");
+    }
+    expect(loadAuthSettings({ SEERRSENSE_LEGACY_TOKEN_ENABLED: "false" }, "shared").legacyToken).toBeUndefined();
+  });
+});

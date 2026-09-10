@@ -65,23 +65,28 @@ SeerrSense exposes the same core capabilities through:
 * MCP
 * REST API
 
-Current MCP tools:
+Current MCP tools, with the annotations the connector directories read:
 
-* `search_media`
-* `resolve_media`
-* `get_media`
-* `request_media`
+| Tool | Does | `readOnlyHint` | `destructiveHint` |
+|---|---|---|---|
+| `search_media` | title search through the person's Seerr | true | false |
+| `resolve_media` | a description to one verified title | true | false |
+| `get_media` | the canonical record for one TMDB id | true | false |
+| `request_media` | files a request in the person's Seerr | false | false |
+
+`request_media` is the write (`readOnlyHint: false`, which is what makes a
+client confirm before calling it) but not destructive: it adds a request and
+removes or overwrites nothing.
+
+Every tool declares an `outputSchema` and answers with `structuredContent`.
+`request_media` returns the request's id and status only; the raw Seerr
+request object, which carries the requesting account, is never relayed.
 
 ## Status
 
-SeerrSense is under active development.
-
-Current focus:
-
-* standalone deployment
-* semantic media resolver
-* Seerr-native orchestration
-* MCP integration
+SeerrSense is stable and deployed: OAuth 2.1 with Google sign-in, per-person
+Seerr instances, PostgreSQL-backed state, and the four tools above. Work in
+progress is listed in the issue tracker.
 
 ## Quick Start
 
@@ -160,7 +165,7 @@ Setting some but not all is refused at startup.
 | `SEERRSENSE_OPEN_SIGNUP` | Set to exactly `true` to admit any Google account, ignoring `SEERRSENSE_ALLOWED_EMAILS`. Any other value — including `TRUE`, `1`, `yes` — means closed |
 | `SEERRSENSE_HOUSEHOLD_EMAILS` | Comma-separated addresses allowed to fall back to the shared `SEERR_URL` instance when they have no Seerr of their own attached. **Empty offers it to nobody signed in** — the legacy shared token and stdio mode are unaffected |
 | `SEERRSENSE_OAUTH_CLIENTS` | Optional pre-registered clients, `client_id=redirect_uri[,uri];...` |
-| `SEERRSENSE_LEGACY_TOKEN_ENABLED` | Set to `false` to stop accepting `SEERRSENSE_AUTH_TOKEN` |
+| `SEERRSENSE_LEGACY_TOKEN_ENABLED` | Whether `SEERRSENSE_AUTH_TOKEN` is accepted over HTTP. **Without OAuth: on unless set to `false`** (it is the only credential). **With OAuth: off unless set to exactly `true`** |
 | `SEERRSENSE_ACCESS_TOKEN_TTL` | Access token lifetime in seconds, default 3600 |
 | `SEERRSENSE_REFRESH_TOKEN_TTL` | Refresh token lifetime in seconds, default 30 days |
 | `DATABASE_URL` | PostgreSQL for OAuth state, attached Seerr instances and the resolve-budget counters. Without it all three live in memory and a restart detaches everyone and resets the budget |
@@ -168,6 +173,7 @@ Setting some but not all is refused at startup.
 | `SEERRSENSE_RATE_LIMIT_OAUTH_MAX` / `_WINDOW_MS` | Per-IP limit on `/oauth/*` and `/account/session`. Default 10 requests / 5 minutes |
 | `SEERRSENSE_RATE_LIMIT_CONNECTION_MAX` / `_WINDOW_MS` | Per-IP limit on `PUT /api/v1/account/connection`, tighter since each call dials an arbitrary host. Default 5 / 5 minutes |
 | `SEERRSENSE_RATE_LIMIT_SUBJECT_MAX` / `_WINDOW_MS` | Per-subject (falling back to per-IP) limit on `/mcp` and `/api/v1/*`. Default 120 / 1 minute |
+| `SEERRSENSE_OPENAI_APPS_CHALLENGE` | The domain-verification token OpenAI issues for a ChatGPT app submission, served verbatim at `/.well-known/openai-apps-challenge`. Unset: the path is 404 |
 | `SEERRSENSE_RATE_LIMIT_GATE_MAX` / `_WINDOW_MS` | Per-IP ceiling applied *before* authentication, so failed bearer attempts are metered too — the route limiters run after the bearer gate and never see a 401. Default 300 / 1 minute |
 | `SEERRSENSE_TRUSTED_PROXY_HOPS` | How many proxy hops in front of the pod to trust when deriving the client address. **Default 0** — no forwarding header is believed, which is correct for a directly exposed container. Set it to the number of hops your ingress actually adds (1 for a single reverse proxy). Setting it higher than the real number lets a caller forge `X-Forwarded-For` and get a fresh bucket from every per-IP limit |
 | `SEERRSENSE_RESOLVE_DAILY_LIMIT` | Model-backed `resolve_media` calls one subject may make per UTC day. Default 50 |
@@ -390,9 +396,13 @@ authorization server.
   are advertised, because a scope advertised but not granted makes clients warn
   the user about permissions on a token that works. `request_media` checks for
   `seerr:request` itself.
-- The shared `SEERRSENSE_AUTH_TOKEN` keeps working during the migration and is
-  compared in constant time. Turn it off with
-  `SEERRSENSE_LEGACY_TOKEN_ENABLED=false`.
+- The shared `SEERRSENSE_AUTH_TOKEN` is compared in constant time and, once
+  OAuth is configured, **not accepted unless `SEERRSENSE_LEGACY_TOKEN_ENABLED`
+  is exactly `true`**. Without OAuth it is the only credential and stays on
+  unless that variable is set to `false`. **Upgrading from 1.8 or earlier:** a
+  deployment with OAuth that never set the variable stops accepting the shared
+  token; any client still configured with it starts getting 401 until it is
+  moved to OAuth or the variable is set to `true`.
 
 ## Development
 

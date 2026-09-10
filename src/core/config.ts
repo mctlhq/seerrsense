@@ -21,6 +21,10 @@ const ConfigSchema = z.object({
   CF_ACCESS_CLIENT_SECRET: z.string().optional(),
   // Read here too so the tools can point a person at the right account page.
   SEERRSENSE_PUBLIC_URL: z.string().url().optional(),
+  // The token OpenAI issues when a ChatGPT app is submitted; it proves the
+  // domain is ours by being served verbatim at a well-known path. Absent
+  // means the path is not served at all.
+  SEERRSENSE_OPENAI_APPS_CHALLENGE: z.string().min(1).optional(),
 });
 
 export type Config = z.infer<typeof ConfigSchema>;

@@ -90,7 +90,7 @@
       <tbody>
         <tr>
           <td><code>search_media</code></td>
-          <td class="muted">Exact or fuzzy search straight through Seerr, films and series only.</td>
+          <td class="muted">Title search straight through your Seerr, films and series only. Read-only.</td>
           <td><span class="chip">seerr:read</span></td>
         </tr>
         <tr>
@@ -105,7 +105,7 @@
         </tr>
         <tr>
           <td><code>request_media</code></td>
-          <td class="muted">Files the request, optionally for named seasons. Refuses when the title is already available, pending or blocklisted.</td>
+          <td class="muted">Files the request in your own Seerr, optionally for named seasons. Refuses when the title is already available, pending or blocklisted. The one write, and your assistant confirms it with you first.</td>
           <td><span class="chip is-write">seerr:request</span></td>
         </tr>
       </tbody>
@@ -153,9 +153,10 @@
     </details>
     <details class="faq-item">
       <summary>Can an assistant request things on its own?</summary>
-      <p>Requesting is a separate scope from reading, and the tool description tells the model to
-        confirm with you first. The server also re-reads the canonical record and refuses to file a
-        request for something already available or pending.</p>
+      <p>Requesting is a separate scope from reading, and the request tool is declared as the one
+        write action, which is what makes Claude and ChatGPT confirm with you before calling it.
+        The server also re-reads the canonical record and refuses to file a request for something
+        already available or pending.</p>
     </details>
     <details class="faq-item">
       <summary>Does a language model see my library?</summary>
