@@ -1,5 +1,17 @@
 # Changelog
 
+## [1.10.2](https://github.com/mctlhq/seerrsense/compare/1.10.1...1.10.2) (2026-09-10)
+
+
+### Bug Fixes
+
+* **site:** assert the callback page from disk, fix its head comment ([51f0d62](https://github.com/mctlhq/seerrsense/commit/51f0d62da44c0387c9c32f17e0c0c146fdcaf1f8))
+* **site:** hide a hidden .btn, guard every contact page, drop site.js from the callback ([facf78d](https://github.com/mctlhq/seerrsense/commit/facf78dfcf87a1eb45fda7ebb861c0f532f29cd8))
+* **site:** one header for every page, an HTML 404, robots.txt, support@mctl.ai ([02b4cee](https://github.com/mctlhq/seerrsense/commit/02b4cee679a90a39ee0c46877d72bc761f2d7843))
+* **site:** one header for every page, an HTML 404, robots.txt, support@mctl.ai ([43f2e1f](https://github.com/mctlhq/seerrsense/commit/43f2e1f327a0394faf86c146e6454ca9ba9fd44c))
+* **site:** pin the is404 conjunct, apply the theme before first paint, state the sign-in rule whole ([923100a](https://github.com/mctlhq/seerrsense/commit/923100adbb085b0b9aab34612ea962d0195566f7))
+* **site:** recognise a browser by Accept, keep the account column, hedge the sign-up copy ([306220d](https://github.com/mctlhq/seerrsense/commit/306220ddaae0cfa38094f1ade9283afcb57107a8))
+
 ## [1.10.1](https://github.com/mctlhq/seerrsense/compare/1.10.0...1.10.1) (2026-09-10)
 
 
