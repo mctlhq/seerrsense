@@ -1,5 +1,18 @@
 # Changelog
 
+## [1.10.0](https://github.com/mctlhq/seerrsense/compare/1.9.1...1.10.0) (2026-09-10)
+
+
+### Features
+
+* **mcp:** whoami — the caller's principal and nothing else ([b3ba7b4](https://github.com/mctlhq/seerrsense/commit/b3ba7b4c3a051c92c2474da07d96efa6d39e3306))
+* **mcp:** whoami — the caller's principal and nothing else ([6ad1f07](https://github.com/mctlhq/seerrsense/commit/6ad1f0704fbb3308602c3c76001eeee11b98b9e4))
+
+
+### Bug Fixes
+
+* **auth:** the legacy token's sentinel is not a subject ([54e8ef4](https://github.com/mctlhq/seerrsense/commit/54e8ef48adf969576cea0103ea134d2e3415e098))
+
 ## [1.9.1](https://github.com/mctlhq/seerrsense/compare/1.9.0...1.9.1) (2026-09-10)
 
 
