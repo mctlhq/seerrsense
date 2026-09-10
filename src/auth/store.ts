@@ -268,6 +268,7 @@ export class MemoryAuthStore implements AuthStore {
     this.pending.clear();
     this.codes.clear();
     this.refresh.clear();
+    this.revokedSubjects.clear();
     this.connections.clear();
     this.resolveUsage.clear();
     this.revokedSessions.clear();

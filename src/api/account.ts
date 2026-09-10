@@ -202,11 +202,11 @@ export function registerAccountRoutes(
     });
   });
 
-  // "Delete my account": everything the store holds about this person, then
-  // every browser session they hold — the one that asked and any other
-  // device's, since a surviving cookie could attach a fresh Seerr to an
-  // account that was just deleted. Access tokens already issued live out
-  // their hour, since they are stateless; nothing they reach will exist.
+  // "Delete my account": first every browser session this person holds — the
+  // one that asked and any other device's, since a surviving cookie could
+  // attach a fresh Seerr to an account that was just deleted — and only then
+  // everything the store holds about them. Access tokens already issued live
+  // out their hour, since they are stateless; nothing they reach will exist.
   //
   // Metered like the connection PUT, per IP. The subject is Google's stable
   // `sub`, so deleting and signing in again yields the same subject with a
