@@ -53,6 +53,10 @@ const PUBLIC_PREFIXES = [
   "/privacy",
   "/terms",
   "/support",
+  "/account/",
+  "/privacy/",
+  "/terms/",
+  "/support/",
   "/icon-512.png",
   "/robots.txt",
   // The browser has no token yet when it finishes its own PKCE exchange here;
@@ -514,6 +518,12 @@ export function buildServer(
   fastify.get("/robots.txt", async (_request, reply) =>
     reply.type("text/plain; charset=utf-8").sendFile("robots.txt"),
   );
+  // A typed trailing slash on a page is the page. Only these four: the
+  // endpoints under /mcp, /oauth/ and /api/ keep exact matching, and a
+  // redirect there would be a second answer to a call that expects one.
+  for (const page of ["/account", "/privacy", "/terms", "/support"]) {
+    fastify.get(`${page}/`, async (_request, reply) => reply.redirect(page, 301));
+  }
   // What a browser gets at an address that is not a page (see the auth gate
   // for how it arrives here). Anything else that reaches this handler has
   // already passed the gate with a valid token, so it is a client asking for a
