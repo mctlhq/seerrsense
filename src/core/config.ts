@@ -15,6 +15,11 @@ const ConfigSchema = z.object({
   // where the MCP client owns the process and there is no network surface.
   SEERRSENSE_AUTH_TOKEN: z.string().min(1).optional(),
   PORT: z.coerce.number().default(8787),
+  // Ceiling on one request to a Seerr, trusted or attached. Reads that get no
+  // answer within it are retried once (src/providers/seerr/client.ts), so the
+  // worst case a single GET can hold a handler is twice this value — 40 s at
+  // the default, 120 s at the maximum. Writes are never retried.
+  SEERR_REQUEST_TIMEOUT_MS: z.coerce.number().int().positive().max(60_000).default(20_000),
   NEBIUS_API_KEY: z.string().min(1).optional(),
   NEBIUS_MODEL: z.string().optional(),
   CF_ACCESS_CLIENT_ID: z.string().optional(),

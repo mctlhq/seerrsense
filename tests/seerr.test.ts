@@ -164,3 +164,80 @@ describe("search terms Overseerr will actually accept", () => {
     expect(fetchImpl).not.toHaveBeenCalled();
   });
 });
+
+describe("SeerrClient timeouts and retries", () => {
+  const hang = (signal: AbortSignal) =>
+    new Promise((_, reject) => {
+      signal.addEventListener("abort", () => reject(Object.assign(new Error("This operation was aborted"), { name: "AbortError" })));
+    });
+  const answer = (body: unknown) => Promise.resolve({ ok: true, status: 200, json: async () => body });
+
+  it("retries a read once when the first attempt gets no answer", async () => {
+    const client = new SeerrClient({ baseUrl: "http://fake", apiKey: "key", timeoutMs: 30 });
+    (global.fetch as any)
+      .mockImplementationOnce((_url: string, init: RequestInit) => hang(init.signal!))
+      .mockImplementationOnce(() => answer({ id: 1, mediaType: "movie", title: "Test", mediaInfo: { status: 5 } }));
+    const result = await client.getMedia("movie", 1);
+    expect(result.status).toBe("AVAILABLE");
+    expect(global.fetch).toHaveBeenCalledTimes(2);
+  });
+
+  it("gives up after the second silence", async () => {
+    const client = new SeerrClient({ baseUrl: "http://fake", apiKey: "key", timeoutMs: 30 });
+    (global.fetch as any).mockImplementation((_url: string, init: RequestInit) => hang(init.signal!));
+    await expect(client.search("anything")).rejects.toMatchObject({ name: "AbortError" });
+    expect(global.fetch).toHaveBeenCalledTimes(2);
+  });
+
+  it("never retries a write, even a silent one", async () => {
+    const client = new SeerrClient({ baseUrl: "http://fake", apiKey: "key", timeoutMs: 30 });
+    (global.fetch as any).mockImplementation((_url: string, init: RequestInit) => hang(init.signal!));
+    await expect(client.requestMedia("movie", 1)).rejects.toMatchObject({ name: "AbortError" });
+    expect(global.fetch).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not retry a read that was answered with an error", async () => {
+    const client = new SeerrClient({ baseUrl: "http://fake", apiKey: "key", timeoutMs: 30 });
+    (global.fetch as any).mockResolvedValue({ ok: false, status: 502, statusText: "Bad Gateway" });
+    await expect(client.getMedia("movie", 1)).rejects.toThrow("Seerr API error: 502");
+    expect(global.fetch).toHaveBeenCalledTimes(1);
+  });
+
+  // The attached-Seerr path folds every transport failure into
+  // SeerrUnreachableError before the retry decision; a silence there must be
+  // retried too, and an answered error must not.
+  it("retries a silent read on the untrusted path as well", async () => {
+    const client = new SeerrClient({
+      baseUrl: "https://mine.example", apiKey: "key", untrusted: true, timeoutMs: 30,
+      lookup: async () => ["93.184.216.34"],
+    });
+    const body = JSON.stringify({ id: 1, mediaType: "movie", title: "Test", mediaInfo: { status: 5 } });
+    (global.fetch as any)
+      .mockImplementationOnce((_url: string, init: RequestInit) => hang(init.signal!))
+      .mockImplementationOnce(() => Promise.resolve({
+        ok: true, status: 200, headers: new Headers({ "content-type": "application/json" }), body: null,
+        text: async () => body,
+      }));
+    const result = await client.getMedia("movie", 1);
+    expect(result.status).toBe("AVAILABLE");
+    expect(global.fetch).toHaveBeenCalledTimes(2);
+    await client.close();
+  });
+
+  it("does not retry an untrusted read that was answered, even with a 5xx", async () => {
+    const client = new SeerrClient({
+      baseUrl: "https://mine.example", apiKey: "key", untrusted: true, timeoutMs: 30,
+      lookup: async () => ["93.184.216.34"],
+    });
+    (global.fetch as any).mockResolvedValue({ ok: false, status: 503, headers: new Headers(), body: null, text: async () => "" });
+    await expect(client.getMedia("movie", 1)).rejects.toMatchObject({ name: "SeerrUnreachableError", upstreamStatus: 503 });
+    expect(global.fetch).toHaveBeenCalledTimes(1);
+    await client.close();
+  });
+
+  it("defaults the ceiling to SEERR_REQUEST_TIMEOUT_MS, 20 s", async () => {
+    const { parseConfig } = await import("../src/core/config.js");
+    expect(parseConfig({}).SEERR_REQUEST_TIMEOUT_MS).toBe(20_000);
+    expect(parseConfig({ SEERR_REQUEST_TIMEOUT_MS: "5000" }).SEERR_REQUEST_TIMEOUT_MS).toBe(5000);
+  });
+});

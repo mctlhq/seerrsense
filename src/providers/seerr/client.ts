@@ -102,6 +102,21 @@ export interface SeerrCredentials {
   untrusted?: boolean;
   /** Injectable for tests; defaults to a real DNS lookup inside the guard. */
   lookup?: (host: string) => Promise<string[]>;
+  /** Per-request ceiling in milliseconds; defaults to SEERR_REQUEST_TIMEOUT_MS. */
+  timeoutMs?: number;
+}
+
+/**
+ * Whether a failure is worth one more attempt: the request never got an
+ * answer at all. A timeout on the household path surfaces as undici's
+ * AbortError; on the untrusted path every transport failure — timeout,
+ * refused connection, reset — is folded into SeerrUnreachableError with no
+ * upstream status. An answer that *was* received (any status, a redirect, a
+ * body that would not parse) is final and is not retried.
+ */
+function isTransient(error: unknown): boolean {
+  if (error instanceof SeerrUnreachableError) return error.upstreamStatus === undefined;
+  return error instanceof Error && error.name === "AbortError";
 }
 
 export class SeerrClient {
@@ -112,6 +127,7 @@ export class SeerrClient {
   private cfAccessClientSecret?: string;
   private untrusted: boolean;
   private lookup?: (host: string) => Promise<string[]>;
+  private timeoutMs: number;
   private guardCache?: { expiresAt: number; addresses: string[]; dispatcher: Agent };
 
   constructor(credentials: SeerrCredentials);
@@ -126,6 +142,7 @@ export class SeerrClient {
     this.cfAccessClientSecret = credentials.cfAccessClientSecret;
     this.untrusted = credentials.untrusted ?? false;
     this.lookup = credentials.lookup;
+    this.timeoutMs = credentials.timeoutMs ?? config.SEERR_REQUEST_TIMEOUT_MS;
   }
 
   private async guardedDispatcher(): Promise<Agent> {
@@ -143,7 +160,27 @@ export class SeerrClient {
     return dispatcher;
   }
 
+  /**
+   * One request, with a single retry for reads that got no answer at all.
+   *
+   * The household Seerr sits behind a Cloudflare tunnel whose tail is long
+   * and jittery: on 2026-09-10 a run of searches from ChatGPT hit the
+   * previous 10-second ceiling three times in a row while direct probes of
+   * the same instance answered in 300 ms. A read that timed out is safe to
+   * ask again; a write is not — a second POST could file a second request —
+   * so only GETs are retried, and only when nothing came back.
+   */
   private async fetch(path: string, options: RequestInit = {}) {
+    const method = (options.method ?? "GET").toUpperCase();
+    try {
+      return await this.fetchOnce(path, options);
+    } catch (error) {
+      if (method !== "GET" || !isTransient(error)) throw error;
+      return await this.fetchOnce(path, options);
+    }
+  }
+
+  private async fetchOnce(path: string, options: RequestInit) {
     if (this.untrusted) return this.fetchUntrusted(path, options);
     return this.fetchTrusted(path, options);
   }
@@ -164,7 +201,7 @@ export class SeerrClient {
   private async fetchTrusted(path: string, options: RequestInit) {
     const url = `${this.baseUrl}${path}`;
     const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), 10000);
+    const timeoutId = setTimeout(() => controller.abort(), this.timeoutMs);
 
     try {
       const response = await fetch(url, {
@@ -192,7 +229,7 @@ export class SeerrClient {
     const dispatcher = await this.guardedDispatcher();
     const url = `${this.baseUrl}${path}`;
     const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), 10000);
+    const timeoutId = setTimeout(() => controller.abort(), this.timeoutMs);
 
     let response: Response;
     try {
