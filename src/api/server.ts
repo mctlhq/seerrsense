@@ -88,9 +88,25 @@ function isSessionRoute(url: string): boolean {
   );
 }
 
-/** An undeclared path, fetched the way a browser fetches a page. */
-function isBrowserNotFound(request: { is404: boolean; method: string; headers: { authorization?: string } }): boolean {
-  return request.is404 && (request.method === "GET" || request.method === "HEAD") && !request.headers.authorization;
+/**
+ * An undeclared path, fetched the way a browser fetches a page: a GET or HEAD,
+ * no token, and `Accept: text/html`. The Accept check is what separates a
+ * person at a mistyped address from everything else that also arrives without
+ * a token — curl, a prober, a JSON fetch() at a wrong /api/v1 path, an MCP
+ * client opening its GET stream at /mcp/ — none of which ask for HTML, and all
+ * of which keep the 401 and its WWW-Authenticate challenge.
+ */
+function isBrowserNotFound(request: {
+  is404: boolean;
+  method: string;
+  headers: { authorization?: string; accept?: string };
+}): boolean {
+  return (
+    request.is404 &&
+    (request.method === "GET" || request.method === "HEAD") &&
+    !request.headers.authorization &&
+    (request.headers.accept ?? "").includes("text/html")
+  );
 }
 
 /**
@@ -336,17 +352,19 @@ export function buildServer(
   // Registered on the root instance (not inside the nested plugin below) on
   // purpose: Fastify's default not-found handler runs through whichever
   // onRequest/preHandler hooks are present at the ROOT level at boot time, so
-  // an undeclared path still meets this gate and answers 401 rather than
-  // leaking a 404 that would tell an unauthenticated caller a route exists.
+  // an undeclared path still meets this gate. Programmatic callers without a
+  // token get the same 401 for a declared and an undeclared path, which keeps
+  // the route table unprobeable to them.
   fastify.addHook("preHandler", async (request, reply) => {
     if (isPublic(request.url) || isSessionRoute(request.url)) return;
-    // A browser at a mistyped address gets the 404 page below instead of the
-    // JSON token challenge: no Authorization header and a plain GET/HEAD is
-    // how a person, not an MCP client, arrives. Every other undeclared request
-    // — a POST, or anything carrying a token — still meets the gate, so an
-    // MCP client that has the endpoint slightly wrong keeps receiving the
-    // challenge that makes it start OAuth, and nothing about which routes
-    // exist is told to a caller who cannot present a token.
+    // The one deliberate exception: a browser navigating to a mistyped
+    // address gets the 404 page below instead of a JSON token challenge. This
+    // does let a browser tell a declared route (401) from an undeclared one
+    // (404); the routes are in a public repository, and a person reading an
+    // error page is who the trade favours. Anything that does not ask for
+    // HTML — a POST, a JSON fetch, an MCP client's GET stream, anything with a
+    // token — still meets the gate, so an MCP client with the endpoint
+    // slightly wrong keeps receiving the challenge that makes it start OAuth.
     if (isBrowserNotFound(request)) return;
 
     let auth: AuthInfo;

@@ -123,8 +123,9 @@ describe("landing page", () => {
     // GET without a token — how a person arrives at a mistyped address — gets
     // an HTML 404 that links the real pages; a missing asset 404s inside the
     // assets prefix.
+    const browser = { accept: "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8" };
     for (const path of ["/not-a-page", "/index.html", "/privacy/", "/api/v1/unknown", "/docs"]) {
-      const response = await app.inject({ method: "GET", url: path });
+      const response = await app.inject({ method: "GET", url: path, headers: browser });
       expect(response.statusCode, path).toBe(404);
       expect(response.headers["content-type"], path).toContain("text/html");
       expect(response.payload, path).toContain("<title>Page not found");
@@ -143,6 +144,23 @@ describe("landing page", () => {
     const post = await app.inject({ method: "POST", url: "/mcp.", payload: {} });
     expect(post.statusCode).toBe(401);
     expect(post.headers["www-authenticate"]).toContain("Bearer");
+    // The browser test is Accept: text/html, not merely "a GET without a
+    // token": curl, a prober, a JSON fetch() at a mistyped path and an MCP
+    // client's GET stream at /mcp/ all arrive without a token too, and must get
+    // the same 401 for an undeclared path as for a declared one, so that an
+    // anonymous caller cannot tell the two apart.
+    for (const [path, accept] of [
+      ["/not-a-page", "application/json"],
+      ["/api/v1/searchx", "*/*"],
+      ["/mcp/", "text/event-stream"],
+    ] as const) {
+      const response = await app.inject({ method: "GET", url: path, headers: { accept } });
+      expect(response.statusCode, `${path} ${accept}`).toBe(401);
+      expect(response.headers["www-authenticate"], path).toContain("Bearer");
+      expect(response.json().error, path).toBe("invalid_token");
+    }
+    const noAccept = await app.inject({ method: "GET", url: "/not-a-page" });
+    expect(noAccept.statusCode).toBe(401);
     const badToken = await app.inject({ method: "GET", url: "/not-a-page", headers: { authorization: "Bearer nope" } });
     expect(badToken.statusCode).toBe(401);
     expect(badToken.json().error).toBe("invalid_token");
@@ -184,6 +202,11 @@ describe("landing page", () => {
       const { payload } = await app.inject({ method: "GET", url: path });
       expect(payload, path).toContain("mailto:support@mctl.ai");
     }
+    // The account page's own <style> must come after the shared sheets, or
+    // its narrower column loses to main.page in components.css on source order.
+    const account = await app.inject({ method: "GET", url: "/account" });
+    expect(account.payload.indexOf("<style>")).toBeGreaterThan(account.payload.indexOf('href="/assets/components.css"'));
+    expect(account.payload).toContain("main.page { max-width: 560px; }");
     // The theme icon names the theme that is showing, so it must be two icons
     // swapped by the same rules the tokens use, not one moon for both.
     const css = await app.inject({ method: "GET", url: "/assets/components.css" });

@@ -8,6 +8,15 @@
 <meta name="robots" content="noindex">
 <link rel="icon" type="image/svg+xml" href="/favicon.svg">
 <link rel="apple-touch-icon" href="/og.png">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Onest:wght@400;500;600&family=JetBrains+Mono:wght@400;500;600&display=swap">
+<!-- The design tokens are vendored from a pinned @mctlhq/css by
+     scripts/sync-tokens.mjs, not fetched from the unversioned CDN sheet: that
+     URL always serves whatever is deployed, so a page could change without a
+     commit. Nothing here depends on a third-party origin. -->
+<link rel="stylesheet" href="/assets/tokens.css">
+<link rel="stylesheet" href="/assets/components.css">
 <style>
   main.page { max-width: 560px; }
   .field { margin-bottom: 20px; }
@@ -29,15 +38,6 @@
   .row { display: flex; flex-wrap: wrap; gap: 12px; margin-top: 8px; }
   [hidden] { display: none !important; }
 </style>
-<link rel="preconnect" href="https://fonts.googleapis.com">
-<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Onest:wght@400;500;600&family=JetBrains+Mono:wght@400;500;600&display=swap">
-<!-- The design tokens are vendored from a pinned @mctlhq/css by
-     scripts/sync-tokens.mjs, not fetched from the unversioned CDN sheet: that
-     URL always serves whatever is deployed, so a page could change without a
-     commit. Nothing here depends on a third-party origin. -->
-<link rel="stylesheet" href="/assets/tokens.css">
-<link rel="stylesheet" href="/assets/components.css">
 </head>
 <body>
 <header class="wrap topbar">
@@ -75,7 +75,8 @@
   <div id="signed-out">
     <p class="lead">Sign in with Google first. You then enter the address and API key of your own
       Overseerr or Jellyseerr; the page tests them against your instance before saving anything,
-      and SeerrSense searches and requests there from then on. Any Google account can sign in.</p>
+      and SeerrSense searches and requests there from then on. On this server, any Google
+      account can sign in.</p>
     <div class="row">
       <button class="btn btn-primary" id="sign-in" type="button">Continue with Google</button>
     </div>
