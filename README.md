@@ -242,7 +242,9 @@ the key is already theirs.
 
 `GET /` serves a static landing page from `public/`, with `/favicon.svg`,
 `/og.png`, `/icon-512.png` (the square, opaque listing icon the connector
-directories ask for) and `/assets/*`. Those paths, the health probes and the
+directories ask for: `favicon.svg` with a square background, rasterised at
+512×512 and flattened to RGB, since one directory rejects transparency) and
+`/assets/*`. Those paths, the health probes and the
 OAuth endpoints are the only ones served without a token.
 
 `/privacy`, `/terms` and `/support` state what is stored, where it goes, what

@@ -2,7 +2,7 @@ import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 import { z } from "zod";
 import type { OAuthConfig } from "../auth/config.js";
 import { open, seal } from "../auth/crypto.js";
-import { readSession, SESSION_COOKIE, type Session } from "../auth/session.js";
+import { readSession, SESSION_COOKIE, SESSION_TTL_SECONDS, type Session } from "../auth/session.js";
 import type { AuthStore } from "../auth/store.js";
 import { SeerrAccessChallengeError, SeerrClient, SeerrUnreachableError } from "../providers/seerr/client.js";
 import { assertPublicSeerrUrl, BlockedAddressError } from "../providers/seerr/guard.js";
@@ -56,7 +56,13 @@ export function registerAccountRoutes(
   async function sessionOf(request: FastifyRequest): Promise<Session | undefined> {
     const cookies = (request as unknown as { cookies?: Record<string, string | undefined> }).cookies;
     const cookie = cookies?.[SESSION_COOKIE];
-    return readSession(cookie, config.signingKey, config.issuer, (id) => store.isSessionRevoked(id));
+    return readSession(cookie, config.signingKey, config.issuer, async (check) => {
+      if (check.id && (await store.isSessionRevoked(check.id))) return true;
+      // A cookie with no iat cannot be placed before a deletion; it is a
+      // pre-jti legacy cookie and is refused outright once its subject has
+      // ever been deleted, which is the safer reading.
+      return store.isSubjectSessionRevoked(check.subject, check.issuedAt ?? Number.MAX_SAFE_INTEGER);
+    });
   }
 
   function requireEncryption(reply: FastifyReply): Buffer | undefined {
@@ -196,13 +202,28 @@ export function registerAccountRoutes(
   });
 
   // "Delete my account": everything the store holds about this person, then
-  // the browser session that asked. Access tokens already issued live out
+  // every browser session they hold — the one that asked and any other
+  // device's, since a surviving cookie could attach a fresh Seerr to an
+  // account that was just deleted. Access tokens already issued live out
   // their hour, since they are stateless; nothing they reach will exist.
-  fastify.delete("/api/v1/account", async (request, reply) => {
+  //
+  // Metered like the connection PUT, per IP. The subject is Google's stable
+  // `sub`, so deleting and signing in again yields the same subject with a
+  // fresh resolve counter; unmetered, that would be a free daily budget
+  // reset. A handful per five minutes keeps it a deletion, not a loop.
+  fastify.delete("/api/v1/account", putRateLimitConfig, async (request, reply) => {
     const session = await sessionOf(request);
     if (!session) return reply.status(401).send({ error: "not signed in" });
     await store.deleteSubject(session.subject);
     tenants.forget(session.subject);
+    const now = Date.now();
+    // A JWT's iat has one-second resolution, so "everything issued before
+    // now" is everything issued before this second began; a cookie minted in
+    // the same second as the deletion cannot be told apart from one minted
+    // just after it. The session that asked is revoked by its jti as well, so
+    // that one is covered regardless of timing.
+    const before = Math.floor(now / 1000) * 1000 - 1;
+    await store.revokeSubjectSessions(session.subject, before, now + SESSION_TTL_SECONDS * 1000);
     if (session.id && session.expiresAt) {
       await store.revokeSession(session.id, session.expiresAt);
     }

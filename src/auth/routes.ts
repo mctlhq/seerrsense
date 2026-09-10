@@ -1,4 +1,4 @@
-import { createHash } from "node:crypto";
+import { createHmac } from "node:crypto";
 import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 import { z } from "zod";
 import { ClientResolutionError, ClientResolver, isAllowedRedirectUri } from "./clients.js";
@@ -389,10 +389,13 @@ export function registerOAuthRoutes(
     // signup, when on, skips the allowlist entirely rather than requiring it
     // to be emptied out to have the same effect.
     if (!config.openSignup && !config.allowedEmails.has(identity.email)) {
-      // The address is personal data and the log is not the allowlist: a
-      // digest is enough to tell repeat attempts apart without recording who.
+      // The address is personal data and the log is not the allowlist. A
+      // digest keyed with the server's own secret tells repeat attempts apart
+      // without recording who: a plain hash of an e-mail address is still the
+      // address, since the space of plausible addresses is small enough to
+      // enumerate, and only the key makes it unlinkable to a log reader.
       request.log.warn(
-        { emailDigest: createHash("sha256").update(identity.email).digest("hex").slice(0, 16) },
+        { emailDigest: createHmac("sha256", config.signingKey).update(identity.email).digest("hex").slice(0, 16) },
         "rejected a Google account outside the allowlist",
       );
       return redirectError(reply, pending.redirectUri, "access_denied",

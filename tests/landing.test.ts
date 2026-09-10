@@ -234,7 +234,12 @@ describe("landing page", () => {
   it("offers self-service deletion on the privacy page", async () => {
     const { payload } = await app.inject({ method: "GET", url: "/privacy" });
     expect(payload).toContain("Delete my account");
-    expect(payload).not.toContain("write to the address below.</li>");
+    // Deletion must not be deferred to e-mail: the page names the button
+    // first, and e-mail is only the fallback for when the button fails.
+    const removing = payload.slice(payload.indexOf("Removing your data"), payload.indexOf("<h2>Contact</h2>"));
+    expect(removing.indexOf("Delete my account")).toBeGreaterThan(-1);
+    expect(removing.indexOf("Delete my account")).toBeLessThan(removing.indexOf("write to the address below"));
+    expect(removing).not.toMatch(/to have everything .* removed, write/i);
   });
 
   it("keeps the health probes unauthenticated", async () => {

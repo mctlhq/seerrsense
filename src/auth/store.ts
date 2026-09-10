@@ -105,6 +105,15 @@ export interface AuthStore {
   revokeSession(id: string, expiresAt: number): Promise<void>;
   isSessionRevoked(id: string): Promise<boolean>;
   /**
+   * Ends every browser session the subject holds, on every device: any cookie
+   * issued at or before `before` (epoch milliseconds) is refused from now on.
+   * `expiresAt` is when the newest such cookie can have expired, so the record
+   * is swept with the rest.
+   */
+  revokeSubjectSessions(subject: string, before: number, expiresAt: number): Promise<void>;
+  /** Whether a cookie for `subject` issued at `issuedAt` has been ended by revokeSubjectSessions. */
+  isSubjectSessionRevoked(subject: string, issuedAt: number): Promise<boolean>;
+  /**
    * Increments and returns the number of model-backed resolve calls a
    * subject (or the reserved `"__global__"` subject) has made on a given UTC
    * day (`YYYY-MM-DD`). Atomic, so two replicas cannot both see "one below
@@ -134,6 +143,8 @@ export class MemoryAuthStore implements AuthStore {
    * tokens: a self-hoster on this store re-verifies stateless sessions rather
    * than keeping a revocation list across a restart. */
   private revokedSessions = new Map<string, number>();
+  /** subject -> { before, expiresAt }: every cookie issued up to `before` is refused. */
+  private revokedSubjects = new Map<string, { before: number; expiresAt: number }>();
 
   async init(): Promise<void> {}
 
@@ -189,6 +200,9 @@ export class MemoryAuthStore implements AuthStore {
     for (const [key, expiresAt] of this.revokedSessions) {
       if (expiresAt < now) this.revokedSessions.delete(key);
     }
+    for (const [key, record] of this.revokedSubjects) {
+      if (record.expiresAt < now) this.revokedSubjects.delete(key);
+    }
     // Connections are deliberately untouched: they do not expire, and losing one
     // means a person's Seerr silently detaches.
   }
@@ -221,6 +235,19 @@ export class MemoryAuthStore implements AuthStore {
 
   async isSessionRevoked(id: string): Promise<boolean> {
     return this.revokedSessions.has(id);
+  }
+
+  async revokeSubjectSessions(subject: string, before: number, expiresAt: number): Promise<void> {
+    const existing = this.revokedSubjects.get(subject);
+    this.revokedSubjects.set(subject, {
+      before: Math.max(before, existing?.before ?? 0),
+      expiresAt: Math.max(expiresAt, existing?.expiresAt ?? 0),
+    });
+  }
+
+  async isSubjectSessionRevoked(subject: string, issuedAt: number): Promise<boolean> {
+    const record = this.revokedSubjects.get(subject);
+    return record !== undefined && issuedAt <= record.before;
   }
 
   async countResolve(subject: string, day: string): Promise<number> {

@@ -320,6 +320,27 @@ describe.each(stores)("%s", (name, make) => {
     expect(await store.isSessionRevoked(jti)).toBe(true);
   });
 
+  it("ends every session a subject was issued up to a moment, and none issued after", async () => {
+    await fresh();
+    const subject = id("google");
+    const other = id("google");
+    const at = Date.now();
+    await store.revokeSubjectSessions(subject, at, at + 60_000);
+    expect(await store.isSubjectSessionRevoked(subject, at - 1)).toBe(true);
+    expect(await store.isSubjectSessionRevoked(subject, at)).toBe(true);
+    expect(await store.isSubjectSessionRevoked(subject, at + 1)).toBe(false);
+    expect(await store.isSubjectSessionRevoked(other, at - 1)).toBe(false);
+    // A second, earlier revocation never narrows the first.
+    await store.revokeSubjectSessions(subject, at - 1000, at + 30_000);
+    expect(await store.isSubjectSessionRevoked(subject, at)).toBe(true);
+    // And it is swept with the rest once it can matter to no cookie.
+    const stale = id("google");
+    await store.revokeSubjectSessions(stale, at, at - 1);
+    await store.purgeExpired();
+    expect(await store.isSubjectSessionRevoked(stale, at - 1)).toBe(false);
+    expect(await store.isSubjectSessionRevoked(subject, at)).toBe(true);
+  });
+
   it("purgeExpired sweeps a revocation past its expiry but leaves a live one", async () => {
     await fresh();
     const expired = id("jti");
