@@ -103,8 +103,11 @@ pre {
   color: var(--surface-fg);
   border-color: var(--accent);
 }
-/* The toggle only means something with a script running. */
-.theme-toggle[hidden] {
+/* The toggle only means something with a script running. The same goes for
+   any .btn a script hides (the copy button without a clipboard API): both
+   set display themselves, which beats the UA sheet's [hidden] rule. */
+.theme-toggle[hidden],
+.btn[hidden] {
   display: none;
 }
 /* The icon names the theme that is showing: a moon on the dark page, a sun on

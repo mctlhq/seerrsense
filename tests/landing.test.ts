@@ -221,12 +221,18 @@ describe("landing page", () => {
       for (const link of pages) {
         expect(payload, `${path} links ${link}`).toContain(`href="${link}"`);
       }
-      expect(payload, path).not.toContain("gmail.com");
     }
     for (const path of ["/privacy", "/terms", "/support"]) {
       const { payload } = await app.inject({ method: "GET", url: path });
       expect(payload, path).toContain("mailto:support@mctl.ai");
+      // The pages that state an address state only this one.
+      expect(payload, path).not.toContain("gmail.com");
+      expect(payload.match(/mailto:/g)?.length, path).toBe(1);
     }
+    const css = await app.inject({ method: "GET", url: "/assets/components.css" });
+    expect(css.payload).toMatch(/\.btn\[hidden\]\s*\{\s*display: none;/);
+    const callback = await app.inject({ method: "GET", url: "/account/callback?code=x" });
+    expect(callback.payload).not.toContain("site.js");
     // The account page's own <style> must come after the shared sheets, or
     // its narrower column loses to main.page in components.css on source order.
     const account = await app.inject({ method: "GET", url: "/account" });
@@ -234,9 +240,9 @@ describe("landing page", () => {
     expect(account.payload).toContain("main.page { max-width: 560px; }");
     // The theme icon names the theme that is showing, so it must be two icons
     // swapped by the same rules the tokens use, not one moon for both.
-    const css = await app.inject({ method: "GET", url: "/assets/components.css" });
-    expect(css.payload).toMatch(/:root\[data-theme="light"\] \.theme-toggle \.icon-moon \{ display: none; \}/);
-    expect(css.payload).toContain("prefers-color-scheme: light");
+    const sheet = await app.inject({ method: "GET", url: "/assets/components.css" });
+    expect(sheet.payload).toMatch(/:root\[data-theme="light"\] \.theme-toggle \.icon-moon \{ display: none; \}/);
+    expect(sheet.payload).toContain("prefers-color-scheme: light");
   });
 
   it("describes the current ChatGPT path and names the model provider", async () => {

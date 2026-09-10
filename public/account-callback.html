@@ -20,7 +20,9 @@
   <h2 id="message">Finishing sign-in…</h2>
   <p class="lead" id="detail">One moment.</p>
 </main>
-<script src="/assets/site.js"></script>
+<!-- No site.js here: it only wires controls this page does not have, and the
+     inline snippet in <head> already applied the theme. This page carries the
+     authorization code in its address; it loads nothing it does not need. -->
 <script>
 (function () {
   // The PKCE verifier never left the browser, so the exchange is finished from
