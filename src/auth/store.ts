@@ -89,6 +89,14 @@ export interface AuthStore {
   putUserConnection(connection: UserConnection): Promise<void>;
   deleteUserConnection(subject: string): Promise<void>;
   /**
+   * Everything held about one person, gone in one call: the attached Seerr,
+   * every refresh token (so every assistant is signed out), any login in
+   * flight, and the resolve counters. Browser sessions are stateless and are
+   * ended by the caller. This is what "Delete my account" means; the privacy
+   * page promises it without a support e-mail.
+   */
+  deleteSubject(subject: string): Promise<void>;
+  /**
    * Records a browser session as ended, keyed by its `jti`. `expiresAt` is the
    * session's own expiry (epoch milliseconds) — the record need not outlive
    * the cookie it revokes, so `purgeExpired` sweeps it on the same schedule as
@@ -195,6 +203,16 @@ export class MemoryAuthStore implements AuthStore {
 
   async deleteUserConnection(subject: string): Promise<void> {
     this.connections.delete(subject);
+  }
+
+  async deleteSubject(subject: string): Promise<void> {
+    this.connections.delete(subject);
+    for (const [key, value] of this.pending) if (value.subject === subject) this.pending.delete(key);
+    for (const [key, value] of this.codes) if (value.subject === subject) this.codes.delete(key);
+    for (const [key, value] of this.refresh) if (value.subject === subject) this.refresh.delete(key);
+    for (const key of this.resolveUsage.keys()) {
+      if (key.slice(0, key.lastIndexOf(" ")) === subject) this.resolveUsage.delete(key);
+    }
   }
 
   async revokeSession(id: string, expiresAt: number): Promise<void> {

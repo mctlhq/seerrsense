@@ -271,6 +271,37 @@ describe.each(stores)("%s", (name, make) => {
     expect(await store.getUserConnection(subject)).toBeUndefined();
   });
 
+  it("forgets a whole person in one call, and nobody else", async () => {
+    await fresh();
+    const gone = id("google");
+    const stays = id("google");
+    await store.putUserConnection(connection({ subject: gone }));
+    await store.putUserConnection(connection({ subject: stays }));
+    const goneHash = id("hash");
+    const staysHash = id("hash");
+    await store.putRefreshToken(refresh({ tokenHash: goneHash, familyId: id("fam"), subject: gone }));
+    await store.putRefreshToken(refresh({ tokenHash: staysHash, familyId: id("fam"), subject: stays }));
+    const goneCode = id("code");
+    await store.putAuthCode(authCode({ code: goneCode, subject: gone }));
+    const goneState = id("state");
+    await store.putPendingAuth(pending({ state: goneState, subject: gone, email: "gone@example.com" }));
+    await store.countResolve(gone, "2026-09-10");
+    await store.countResolve(stays, "2026-09-10");
+
+    await store.deleteSubject(gone);
+
+    expect(await store.getUserConnection(gone)).toBeUndefined();
+    expect(await store.getRefreshToken(goneHash)).toBeUndefined();
+    expect(await store.takeAuthCode(goneCode)).toBeUndefined();
+    expect(await store.takePendingAuth(goneState)).toBeUndefined();
+    // A fresh count after deletion starts from one again.
+    expect(await store.countResolve(gone, "2026-09-10")).toBe(1);
+
+    expect(await store.getUserConnection(stays)).toBeDefined();
+    expect(await store.getRefreshToken(staysHash)).toBeDefined();
+    expect(await store.countResolve(stays, "2026-09-10")).toBe(2);
+  });
+
   it("keeps two people apart", async () => {
     await fresh();
     const mine = id("google");

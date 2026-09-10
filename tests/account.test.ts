@@ -656,6 +656,56 @@ describe("what the account page reports", () => {
   });
 });
 
+describe("deleting the account", () => {
+  it("removes the connection and every grant, ends the session, and answers 401 afterwards", async () => {
+    const app = await makeApp();
+    const cookie = await signIn(app, ALLOWED_EMAIL);
+    seerrAnswers = { ok: true, body: { displayName: "Owner" } };
+    const put = await app.inject({
+      method: "PUT", url: "/api/v1/account/connection", headers: { cookie },
+      payload: { seerrUrl: "https://mine.example", apiKey: "key-1" },
+    });
+    expect(put.statusCode, put.payload).toBe(200);
+    // An assistant's grant for the same person, so deletion has something to
+    // sign out.
+    const token = await mcpTokenFor(app, ALLOWED_EMAIL);
+    const before = await app.inject({
+      method: "GET", url: "/api/v1/search?query=x", headers: { authorization: `Bearer ${token}` },
+    });
+    expect(before.statusCode).toBe(200);
+
+    const del = await app.inject({ method: "DELETE", url: "/api/v1/account", headers: { cookie } });
+    expect(del.statusCode, del.payload).toBe(200);
+    expect(JSON.parse(del.payload)).toEqual({ deleted: true });
+    const setCookie = del.headers["set-cookie"] as string | string[];
+    const raw = Array.isArray(setCookie) ? setCookie[0] : setCookie;
+    expect(raw).toMatch(/Expires=|Max-Age=0/);
+
+    // The session that asked is gone.
+    expect((await app.inject({ method: "GET", url: "/api/v1/account/connection", headers: { cookie } })).statusCode).toBe(401);
+    // Signing in again finds no connection: the row was deleted, not hidden.
+    const again = await signIn(app, ALLOWED_EMAIL);
+    const after = await app.inject({ method: "GET", url: "/api/v1/account/connection", headers: { cookie: again } });
+    expect(JSON.parse(after.payload).connected).toBe(false);
+    await app.close();
+  });
+
+  it("refuses without a session, like the rest of the account API", async () => {
+    const app = await makeApp();
+    expect((await app.inject({ method: "DELETE", url: "/api/v1/account" })).statusCode).toBe(401);
+    await app.close();
+  });
+
+  it("is offered on the page, behind a second click", async () => {
+    const app = await makeApp();
+    const { payload } = await app.inject({ method: "GET", url: "/account" });
+    expect(payload).toContain('id="delete-account"');
+    expect(payload).toContain('id="delete-confirm"');
+    expect(payload).not.toContain("confirm(");
+    await app.close();
+  });
+});
+
 describe("signing out", () => {
   it("clears the session cookie with the same attributes it was set with", async () => {
     const app = await makeApp();

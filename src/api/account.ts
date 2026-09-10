@@ -116,10 +116,9 @@ export function registerAccountRoutes(
       await assertPublicSeerrUrl(body.data.seerrUrl, { lookup: deps.lookup });
     } catch (error) {
       if (error instanceof BlockedAddressError) {
-        request.log.warn(
-          { host: new URL(body.data.seerrUrl).hostname },
-          "rejected a Seerr connection address",
-        );
+        // The address itself is the person's own infrastructure and stays out
+        // of the log; that it was blocked, and why, is all an operator needs.
+        request.log.warn({ reason: error.message }, "rejected a Seerr connection address");
         return reply.status(400).send({ error: "That address cannot be used. Check it and try again." });
       }
       throw error;
@@ -194,6 +193,28 @@ export function registerAccountRoutes(
       connected: false,
       fallback: tenants.householdFallback(session.email, session.subject),
     });
+  });
+
+  // "Delete my account": everything the store holds about this person, then
+  // the browser session that asked. Access tokens already issued live out
+  // their hour, since they are stateless; nothing they reach will exist.
+  fastify.delete("/api/v1/account", async (request, reply) => {
+    const session = await sessionOf(request);
+    if (!session) return reply.status(401).send({ error: "not signed in" });
+    await store.deleteSubject(session.subject);
+    tenants.forget(session.subject);
+    if (session.id && session.expiresAt) {
+      await store.revokeSession(session.id, session.expiresAt);
+    }
+    return reply
+      .header("cache-control", "no-store")
+      .clearCookie(SESSION_COOKIE, {
+        path: "/",
+        httpOnly: true,
+        sameSite: "lax",
+        secure: config.issuer.startsWith("https://"),
+      })
+      .send({ deleted: true });
   });
 
   // Ends the browser session only. MCP grants (refresh and access tokens) are

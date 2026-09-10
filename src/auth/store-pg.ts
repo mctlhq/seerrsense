@@ -275,6 +275,26 @@ export class PostgresAuthStore implements AuthStore {
     await this.pool.query(`DELETE FROM user_connections WHERE subject = $1`, [subject]);
   }
 
+  async deleteSubject(subject: string): Promise<void> {
+    // One transaction: a person who asked to be forgotten must not end up
+    // half-forgotten because the pod died between two statements.
+    const client = await this.pool.connect();
+    try {
+      await client.query("BEGIN");
+      await client.query(`DELETE FROM user_connections WHERE subject = $1`, [subject]);
+      await client.query(`DELETE FROM oauth_refresh_tokens WHERE subject = $1`, [subject]);
+      await client.query(`DELETE FROM oauth_auth_codes WHERE subject = $1`, [subject]);
+      await client.query(`DELETE FROM oauth_pending_auth WHERE subject = $1`, [subject]);
+      await client.query(`DELETE FROM resolve_usage WHERE subject = $1`, [subject]);
+      await client.query("COMMIT");
+    } catch (error) {
+      await client.query("ROLLBACK").catch(() => {});
+      throw error;
+    } finally {
+      client.release();
+    }
+  }
+
   async revokeSession(id: string, expiresAt: number): Promise<void> {
     await this.pool.query(
       `INSERT INTO revoked_sessions (jti, expires_at) VALUES ($1, $2)

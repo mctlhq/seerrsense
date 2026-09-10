@@ -196,6 +196,45 @@ describe("landing page", () => {
     const { payload } = await app.inject({ method: "GET", url: "/" });
     expect(payload).toContain('href="/privacy"');
     expect(payload).toContain('href="/terms"');
+    expect(payload).toContain('href="/support"');
+  });
+
+  // Both connector directories ask for a support URL, a listing icon and
+  // example prompts; a listing without them is sent back before review.
+  it("serves the support page and the listing icon without a token", async () => {
+    const support = await app.inject({ method: "GET", url: "/support" });
+    expect(support.statusCode).toBe(200);
+    expect(support.headers["content-type"]).toContain("text/html");
+    expect(support.payload).toContain("github.com/mctlhq/seerrsense/issues");
+    expect(support.payload).toContain("mailto:");
+    for (const page of ["/privacy", "/terms", "/account"]) {
+      expect((await app.inject({ method: "GET", url: page })).payload, page).toContain('href="/support"');
+    }
+    const icon = await app.inject({ method: "GET", url: "/icon-512.png" });
+    expect(icon.statusCode).toBe(200);
+    expect(icon.headers["content-type"]).toContain("image/png");
+    // PNG header, then the IHDR chunk: width and height at bytes 16-23.
+    const png = icon.rawPayload;
+    expect(png.subarray(0, 8).toString("hex")).toBe("89504e470d0a1a0a");
+    expect(png.readUInt32BE(16)).toBe(512);
+    expect(png.readUInt32BE(20)).toBe(512);
+    // Colour type 2 = RGB without an alpha channel.
+    expect(png[25]).toBe(2);
+  });
+
+  it("gives example prompts that exercise each tool", async () => {
+    const { payload } = await app.inject({ method: "GET", url: "/" });
+    expect(payload).toContain('id="prompts"');
+    for (const tool of ["search_media", "resolve_media", "get_media", "request_media"]) {
+      const section = payload.slice(payload.indexOf('id="prompts"'), payload.indexOf('id="setup"'));
+      expect(section, tool).toContain(tool);
+    }
+  });
+
+  it("offers self-service deletion on the privacy page", async () => {
+    const { payload } = await app.inject({ method: "GET", url: "/privacy" });
+    expect(payload).toContain("Delete my account");
+    expect(payload).not.toContain("write to the address below.</li>");
   });
 
   it("keeps the health probes unauthenticated", async () => {
