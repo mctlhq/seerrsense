@@ -489,11 +489,15 @@ test("whoami returns the principal and nothing from the catalogue", async () => 
   const body = JSON.parse(response.payload.match(/data: ({.*})/)![1]);
   expect(body.result.isError).toBeFalsy();
   const who = body.result.structuredContent;
-  expect(Object.keys(who).sort()).toEqual(["connected", "email", "source", "subject"]);
+  // The static shared token is not a principal: no subject and no email come
+  // back, and neither is invented. The verifier's internal sentinel
+  // ("static-token") must not surface as if it were a per-user identity —
+  // on a shared surface this tool exists to tell user A from user B.
+  expect(Object.keys(who).sort()).toEqual(["connected", "email", "source"]);
+  expect(who.subject).toBeUndefined();
+  expect(who.email).toBe("");
   expect(["own", "household", "none"]).toContain(who.source);
   expect(typeof who.connected).toBe("boolean");
-  // The static shared token is a principal without an email; it must not
-  // invent one, and it must not leak any media field.
-  expect(who.email).toBe("");
+  // Nothing from the catalogue.
   expect(JSON.stringify(who)).not.toMatch(/tmdb|title|results/i);
 });
