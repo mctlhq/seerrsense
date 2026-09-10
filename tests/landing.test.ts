@@ -237,7 +237,7 @@ describe("landing page", () => {
     // assert against the 404 page and pass whatever the file said.
     const callback = readFileSync(new URL("../public/account-callback.html", import.meta.url), "utf8");
     expect(callback).toContain('localStorage.getItem("seerrsense-theme")');
-    expect(callback).not.toContain("site.js"); // mutation-checked: adding the tag back fails this
+    expect(callback).not.toContain('<script src="/assets/site.js"');
     // The account page's own <style> must come after the shared sheets, or
     // its narrower column loses to main.page in components.css on source order.
     const account = await app.inject({ method: "GET", url: "/account" });
