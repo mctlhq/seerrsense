@@ -45,7 +45,7 @@ describe("stdio transport", () => {
     expect(init.result.serverInfo.name).toBe("SeerrSense");
     const tools = parsed.find((m) => m.id === 2);
     expect(tools.result.tools.map((t: any) => t.name).sort()).toEqual(
-      ["get_media", "request_media", "resolve_media", "search_media"],
+      ["get_media", "request_media", "resolve_media", "search_media", "whoami"],
     );
   }, 20000);
 });

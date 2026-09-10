@@ -121,8 +121,11 @@ test("MCP POST /mcp listTools", async () => {
   expect(dataMatch).toBeTruthy();
   const body = JSON.parse(dataMatch![1]);
   const tools = body.result.tools;
-  expect(tools).toHaveLength(4);
+  expect(tools).toHaveLength(5);
+  expect(tools[0].name).toBe("whoami");
   expect(tools.find((t: any) => t.name === "search_media")).toBeDefined();
+  // Every tool declares its read-only-ness; the portal allowlist reasons from it.
+  for (const t of tools) expect(typeof t.annotations?.readOnlyHint, t.name).toBe("boolean");
   expect(tools.find((t: any) => t.name === "request_media")).toBeDefined();
   expect(tools.find((t: any) => t.name === "resolve_media")).toBeDefined();
 });
@@ -473,4 +476,24 @@ test("a tool call over /mcp reaches the household Seerr", async () => {
   expect(body.result.isError).toBeFalsy();
   expect(body.result.content[0].text).toContain("Arrival");
   expect(householdSeerr.search).toHaveBeenCalledWith("arrival");
+});
+
+test("whoami returns the principal and nothing from the catalogue", async () => {
+  const response = await app.inject({
+    method: "POST",
+    url: "/mcp",
+    headers: { accept: "application/json, text/event-stream", authorization: "Bearer secret123" },
+    payload: { jsonrpc: "2.0", id: 99, method: "tools/call", params: { name: "whoami", arguments: {} } },
+  });
+  expect(response.statusCode).toBe(200);
+  const body = JSON.parse(response.payload.match(/data: ({.*})/)![1]);
+  expect(body.result.isError).toBeFalsy();
+  const who = body.result.structuredContent;
+  expect(Object.keys(who).sort()).toEqual(["connected", "email", "source", "subject"]);
+  expect(["own", "household", "none"]).toContain(who.source);
+  expect(typeof who.connected).toBe("boolean");
+  // The static shared token is a principal without an email; it must not
+  // invent one, and it must not leak any media field.
+  expect(who.email).toBe("");
+  expect(JSON.stringify(who)).not.toMatch(/tmdb|title|results/i);
 });

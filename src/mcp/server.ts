@@ -51,6 +51,20 @@ const ResolutionResultSchema = z.object({
   matchReason: z.string().describe("Why this candidate was chosen"),
 });
 
+/**
+ * What `whoami` returns: the caller's principal and nothing from the
+ * catalogue. It exists for the aggregate portal's identity check (user A and
+ * user B must reach this upstream as two different people, mctlhq/.github#44)
+ * and is the first tool on that portal's allowlist, so it must stay free of
+ * anything a person would not want a shared surface to show.
+ */
+const WhoamiSchema = z.object({
+  subject: z.string().optional().describe("The OAuth subject this session was resolved for; absent in stdio mode"),
+  email: z.string().describe("The Google account the session belongs to; empty for the legacy shared token and stdio"),
+  source: z.enum(["own", "household", "none"]).describe("Whose Seerr this session reaches: the caller's own, a household member's, or none yet"),
+  connected: z.boolean().describe("Whether a Seerr is reachable for this session at all"),
+});
+
 const SearchResultSchema = z.object({
   results: z.array(MediaCandidateSchema).describe("Up to five best matches, in Seerr's order"),
 });
@@ -225,6 +239,25 @@ export function createSeerrSenseMcpServer(
     }
   }
   const mediaResolver = client ? new MediaResolver(client, intentExtractor) : undefined;
+
+  mcpServer.registerTool("whoami",
+    {
+      title: "Who am I",
+      description:
+        "Returns who this session is authenticated as and whose Seerr it reaches. " +
+        "Reads nothing from the catalogue; safe to expose on any surface.",
+      inputSchema: z.object({}),
+      outputSchema: WhoamiSchema,
+      annotations: { title: "Who am I", ...READ_ONLY },
+    },
+    async () =>
+      ok({
+        subject: tenant?.subject,
+        email: tenant?.email ?? "",
+        source: tenant?.source ?? "none",
+        connected: Boolean(client),
+      })
+  );
 
   mcpServer.registerTool("search_media",
     {
