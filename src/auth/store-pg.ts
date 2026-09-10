@@ -71,6 +71,11 @@ const SCHEMA_SQL = `
         jti        TEXT   PRIMARY KEY,
         expires_at BIGINT NOT NULL
       );
+      CREATE TABLE IF NOT EXISTS revoked_subjects (
+        subject    TEXT   PRIMARY KEY,
+        before     BIGINT NOT NULL,
+        expires_at BIGINT NOT NULL
+      );
     `;
 
 /**
@@ -232,6 +237,7 @@ export class PostgresAuthStore implements AuthStore {
     await this.pool.query(`DELETE FROM oauth_auth_codes WHERE expires_at < $1`, [now]);
     await this.pool.query(`DELETE FROM oauth_refresh_tokens WHERE expires_at < $1`, [now]);
     await this.pool.query(`DELETE FROM revoked_sessions WHERE expires_at < $1`, [now]);
+    await this.pool.query(`DELETE FROM revoked_subjects WHERE expires_at < $1`, [now]);
     // user_connections is not swept here on purpose — see the note on the type.
   }
 
@@ -275,6 +281,26 @@ export class PostgresAuthStore implements AuthStore {
     await this.pool.query(`DELETE FROM user_connections WHERE subject = $1`, [subject]);
   }
 
+  async deleteSubject(subject: string): Promise<void> {
+    // One transaction: a person who asked to be forgotten must not end up
+    // half-forgotten because the pod died between two statements.
+    const client = await this.pool.connect();
+    try {
+      await client.query("BEGIN");
+      await client.query(`DELETE FROM user_connections WHERE subject = $1`, [subject]);
+      await client.query(`DELETE FROM oauth_refresh_tokens WHERE subject = $1`, [subject]);
+      await client.query(`DELETE FROM oauth_auth_codes WHERE subject = $1`, [subject]);
+      await client.query(`DELETE FROM oauth_pending_auth WHERE subject = $1`, [subject]);
+      await client.query(`DELETE FROM resolve_usage WHERE subject = $1`, [subject]);
+      await client.query("COMMIT");
+    } catch (error) {
+      await client.query("ROLLBACK").catch(() => {});
+      throw error;
+    } finally {
+      client.release();
+    }
+  }
+
   async revokeSession(id: string, expiresAt: number): Promise<void> {
     await this.pool.query(
       `INSERT INTO revoked_sessions (jti, expires_at) VALUES ($1, $2)
@@ -286,6 +312,22 @@ export class PostgresAuthStore implements AuthStore {
   async isSessionRevoked(id: string): Promise<boolean> {
     const { rows } = await this.pool.query(
       `SELECT 1 FROM revoked_sessions WHERE jti = $1`, [id]);
+    return rows.length > 0;
+  }
+
+  async revokeSubjectSessions(subject: string, before: number, expiresAt: number): Promise<void> {
+    await this.pool.query(
+      `INSERT INTO revoked_subjects (subject, before, expires_at) VALUES ($1, $2, $3)
+       ON CONFLICT (subject) DO UPDATE SET
+         before = GREATEST(revoked_subjects.before, EXCLUDED.before),
+         expires_at = GREATEST(revoked_subjects.expires_at, EXCLUDED.expires_at)`,
+      [subject, before, expiresAt],
+    );
+  }
+
+  async isSubjectSessionRevoked(subject: string, issuedAt: number): Promise<boolean> {
+    const { rows } = await this.pool.query(
+      `SELECT 1 FROM revoked_subjects WHERE subject = $1 AND before >= $2`, [subject, issuedAt]);
     return rows.length > 0;
   }
 

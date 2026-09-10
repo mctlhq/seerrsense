@@ -51,6 +51,8 @@ const PUBLIC_PREFIXES = [
   "/account/callback",
   "/privacy",
   "/terms",
+  "/support",
+  "/icon-512.png",
   // The browser has no token yet when it finishes its own PKCE exchange here;
   // the route is guarded by the authorization code and verifier it must present.
   "/account/session",
@@ -63,7 +65,9 @@ const PUBLIC_PREFIXES = [
  * accept an MCP access token — an assistant must not be able to read or rewrite
  * which Seerr it talks to.
  */
-const SESSION_PREFIXES = ["/api/v1/account/"];
+// "/api/v1/account" itself is "Delete my account": the same cookie, the same
+// refusal of an MCP token, one path segment shorter.
+const SESSION_PREFIXES = ["/api/v1/account/", "/api/v1/account"];
 
 function isPublic(url: string): boolean {
   // Match on the path only: "/healthz?x=1" is the same route, and the previous
@@ -77,7 +81,9 @@ function isPublic(url: string): boolean {
 
 function isSessionRoute(url: string): boolean {
   const path = url.split("?")[0];
-  return SESSION_PREFIXES.some((prefix) => path.startsWith(prefix));
+  return SESSION_PREFIXES.some((prefix) =>
+    prefix.endsWith("/") ? path.startsWith(prefix) : path === prefix,
+  );
 }
 
 /**
@@ -437,6 +443,13 @@ export function buildServer(
   fastify.get("/terms", async (_request, reply) =>
     reply.type("text/html; charset=utf-8").sendFile("terms.html"),
   );
+  // Both connector directories ask for a support URL next to privacy and terms.
+  fastify.get("/support", async (_request, reply) =>
+    reply.type("text/html; charset=utf-8").sendFile("support.html"),
+  );
+  // The square, opaque listing icon the directories want; the SVG favicon has
+  // rounded corners and transparency, which one of them rejects.
+  fastify.get("/icon-512.png", async (_request, reply) => reply.type("image/png").sendFile("icon-512.png"));
   // Domain verification for the ChatGPT app directory: OpenAI generates a
   // token per submission and fetches it from this exact path. The value is
   // configuration rather than a file so a resubmission is an env change, not

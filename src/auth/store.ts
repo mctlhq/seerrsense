@@ -89,6 +89,14 @@ export interface AuthStore {
   putUserConnection(connection: UserConnection): Promise<void>;
   deleteUserConnection(subject: string): Promise<void>;
   /**
+   * Everything held about one person, gone in one call: the attached Seerr,
+   * every refresh token (so every assistant is signed out), any login in
+   * flight, and the resolve counters. Browser sessions are stateless and are
+   * ended by the caller. This is what "Delete my account" means; the privacy
+   * page promises it without a support e-mail.
+   */
+  deleteSubject(subject: string): Promise<void>;
+  /**
    * Records a browser session as ended, keyed by its `jti`. `expiresAt` is the
    * session's own expiry (epoch milliseconds) — the record need not outlive
    * the cookie it revokes, so `purgeExpired` sweeps it on the same schedule as
@@ -96,6 +104,15 @@ export interface AuthStore {
    */
   revokeSession(id: string, expiresAt: number): Promise<void>;
   isSessionRevoked(id: string): Promise<boolean>;
+  /**
+   * Ends every browser session the subject holds, on every device: any cookie
+   * issued at or before `before` (epoch milliseconds) is refused from now on.
+   * `expiresAt` is when the newest such cookie can have expired, so the record
+   * is swept with the rest.
+   */
+  revokeSubjectSessions(subject: string, before: number, expiresAt: number): Promise<void>;
+  /** Whether a cookie for `subject` issued at `issuedAt` has been ended by revokeSubjectSessions. */
+  isSubjectSessionRevoked(subject: string, issuedAt: number): Promise<boolean>;
   /**
    * Increments and returns the number of model-backed resolve calls a
    * subject (or the reserved `"__global__"` subject) has made on a given UTC
@@ -126,6 +143,8 @@ export class MemoryAuthStore implements AuthStore {
    * tokens: a self-hoster on this store re-verifies stateless sessions rather
    * than keeping a revocation list across a restart. */
   private revokedSessions = new Map<string, number>();
+  /** subject -> { before, expiresAt }: every cookie issued up to `before` is refused. */
+  private revokedSubjects = new Map<string, { before: number; expiresAt: number }>();
 
   async init(): Promise<void> {}
 
@@ -181,6 +200,9 @@ export class MemoryAuthStore implements AuthStore {
     for (const [key, expiresAt] of this.revokedSessions) {
       if (expiresAt < now) this.revokedSessions.delete(key);
     }
+    for (const [key, record] of this.revokedSubjects) {
+      if (record.expiresAt < now) this.revokedSubjects.delete(key);
+    }
     // Connections are deliberately untouched: they do not expire, and losing one
     // means a person's Seerr silently detaches.
   }
@@ -197,12 +219,35 @@ export class MemoryAuthStore implements AuthStore {
     this.connections.delete(subject);
   }
 
+  async deleteSubject(subject: string): Promise<void> {
+    this.connections.delete(subject);
+    for (const [key, value] of this.pending) if (value.subject === subject) this.pending.delete(key);
+    for (const [key, value] of this.codes) if (value.subject === subject) this.codes.delete(key);
+    for (const [key, value] of this.refresh) if (value.subject === subject) this.refresh.delete(key);
+    for (const key of this.resolveUsage.keys()) {
+      if (key.slice(0, key.lastIndexOf(" ")) === subject) this.resolveUsage.delete(key);
+    }
+  }
+
   async revokeSession(id: string, expiresAt: number): Promise<void> {
     this.revokedSessions.set(id, expiresAt);
   }
 
   async isSessionRevoked(id: string): Promise<boolean> {
     return this.revokedSessions.has(id);
+  }
+
+  async revokeSubjectSessions(subject: string, before: number, expiresAt: number): Promise<void> {
+    const existing = this.revokedSubjects.get(subject);
+    this.revokedSubjects.set(subject, {
+      before: Math.max(before, existing?.before ?? 0),
+      expiresAt: Math.max(expiresAt, existing?.expiresAt ?? 0),
+    });
+  }
+
+  async isSubjectSessionRevoked(subject: string, issuedAt: number): Promise<boolean> {
+    const record = this.revokedSubjects.get(subject);
+    return record !== undefined && issuedAt <= record.before;
   }
 
   async countResolve(subject: string, day: string): Promise<number> {
@@ -223,6 +268,7 @@ export class MemoryAuthStore implements AuthStore {
     this.pending.clear();
     this.codes.clear();
     this.refresh.clear();
+    this.revokedSubjects.clear();
     this.connections.clear();
     this.resolveUsage.clear();
     this.revokedSessions.clear();

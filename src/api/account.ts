@@ -2,7 +2,7 @@ import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 import { z } from "zod";
 import type { OAuthConfig } from "../auth/config.js";
 import { open, seal } from "../auth/crypto.js";
-import { readSession, SESSION_COOKIE, type Session } from "../auth/session.js";
+import { readSession, SESSION_COOKIE, SESSION_TTL_SECONDS, type Session } from "../auth/session.js";
 import type { AuthStore } from "../auth/store.js";
 import { SeerrAccessChallengeError, SeerrClient, SeerrUnreachableError } from "../providers/seerr/client.js";
 import { assertPublicSeerrUrl, BlockedAddressError } from "../providers/seerr/guard.js";
@@ -35,28 +35,35 @@ export function registerAccountRoutes(
     rateLimit?: { max: number; timeWindow: number };
   } = {},
 ) {
-  const putRateLimitConfig = deps.rateLimit
-    ? {
-        config: {
-          rateLimit: {
-            max: deps.rateLimit.max,
-            timeWindow: deps.rateLimit.timeWindow,
-            keyGenerator: (req: FastifyRequest) => req.ip,
-            onExceeded: (req: FastifyRequest) => {
-              req.log.warn(
-                { route: "/api/v1/account/connection", key: "ip" },
-                "rate limit exceeded",
-              );
+  // Per-IP limiter for the routes that must not be loopable, labelled with
+  // the route it guards so a log line says which one was hammered.
+  const ipRateLimited = (route: string) =>
+    deps.rateLimit
+      ? {
+          config: {
+            rateLimit: {
+              max: deps.rateLimit.max,
+              timeWindow: deps.rateLimit.timeWindow,
+              keyGenerator: (req: FastifyRequest) => req.ip,
+              onExceeded: (req: FastifyRequest) => {
+                req.log.warn({ route, key: "ip" }, "rate limit exceeded");
+              },
             },
           },
-        },
-      }
-    : {};
+        }
+      : {};
+  const putRateLimitConfig = ipRateLimited("/api/v1/account/connection");
 
   async function sessionOf(request: FastifyRequest): Promise<Session | undefined> {
     const cookies = (request as unknown as { cookies?: Record<string, string | undefined> }).cookies;
     const cookie = cookies?.[SESSION_COOKIE];
-    return readSession(cookie, config.signingKey, config.issuer, (id) => store.isSessionRevoked(id));
+    return readSession(cookie, config.signingKey, config.issuer, async (check) => {
+      if (check.id && (await store.isSessionRevoked(check.id))) return true;
+      // A cookie with no iat cannot be placed before or after a deletion, so
+      // it is treated as issued at the dawn of time: refused once its subject
+      // has ever been deleted, which is the safer reading.
+      return store.isSubjectSessionRevoked(check.subject, check.issuedAt ?? 0);
+    });
   }
 
   function requireEncryption(reply: FastifyReply): Buffer | undefined {
@@ -116,10 +123,9 @@ export function registerAccountRoutes(
       await assertPublicSeerrUrl(body.data.seerrUrl, { lookup: deps.lookup });
     } catch (error) {
       if (error instanceof BlockedAddressError) {
-        request.log.warn(
-          { host: new URL(body.data.seerrUrl).hostname },
-          "rejected a Seerr connection address",
-        );
+        // The address itself is the person's own infrastructure and stays out
+        // of the log; that it was blocked, and why, is all an operator needs.
+        request.log.warn({ reason: error.message }, "rejected a Seerr connection address");
         return reply.status(400).send({ error: "That address cannot be used. Check it and try again." });
       }
       throw error;
@@ -194,6 +200,47 @@ export function registerAccountRoutes(
       connected: false,
       fallback: tenants.householdFallback(session.email, session.subject),
     });
+  });
+
+  // "Delete my account": first every browser session this person holds — the
+  // one that asked and any other device's, since a surviving cookie could
+  // attach a fresh Seerr to an account that was just deleted — and only then
+  // everything the store holds about them. Access tokens already issued live
+  // out their hour, since they are stateless; nothing they reach will exist.
+  //
+  // Metered like the connection PUT, per IP. The subject is Google's stable
+  // `sub`, so deleting and signing in again yields the same subject with a
+  // fresh resolve counter; unmetered, that would be a free daily budget
+  // reset. A handful per five minutes keeps it a deletion, not a loop.
+  fastify.delete("/api/v1/account", ipRateLimited("/api/v1/account"), async (request, reply) => {
+    const session = await sessionOf(request);
+    if (!session) return reply.status(401).send({ error: "not signed in" });
+    // Sessions first, data second: the other way round leaves one round trip
+    // in which another device's still-valid cookie can PUT a fresh connection
+    // row for a subject who has just been forgotten — and that table is never
+    // swept. With the sessions gone first, nothing can write after the delete.
+    const now = Date.now();
+    // A JWT's iat has one-second resolution, so "everything issued before
+    // now" is everything issued before this second began; a cookie minted in
+    // the same second as the deletion cannot be told apart from one minted
+    // just after it. The session that asked is revoked by its jti as well, so
+    // that one is covered regardless of timing.
+    const before = Math.floor(now / 1000) * 1000 - 1;
+    await store.revokeSubjectSessions(session.subject, before, now + SESSION_TTL_SECONDS * 1000);
+    if (session.id && session.expiresAt) {
+      await store.revokeSession(session.id, session.expiresAt);
+    }
+    await store.deleteSubject(session.subject);
+    tenants.forget(session.subject);
+    return reply
+      .header("cache-control", "no-store")
+      .clearCookie(SESSION_COOKIE, {
+        path: "/",
+        httpOnly: true,
+        sameSite: "lax",
+        secure: config.issuer.startsWith("https://"),
+      })
+      .send({ deleted: true });
   });
 
   // Ends the browser session only. MCP grants (refresh and access tokens) are

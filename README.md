@@ -245,12 +245,16 @@ the key is already theirs.
 ## Web
 
 `GET /` serves a static landing page from `public/`, with `/favicon.svg`,
-`/og.png` and `/assets/*`. Those paths, the health probes and the OAuth
-endpoints are the only ones served without a token.
+`/og.png`, `/icon-512.png` (the square, opaque listing icon the connector
+directories ask for: `favicon.svg` with a square background, rasterised at
+512×512 and flattened to RGB, since one directory rejects transparency) and
+`/assets/*`. Those paths, the health probes and the
+OAuth endpoints are the only ones served without a token.
 
-`/privacy` and `/terms` state what is stored, where it goes, and what the
-operator can technically see. Google requires both before an OAuth app can leave
-testing, and a service holding other people's API keys owes them the statement
+`/privacy`, `/terms` and `/support` state what is stored, where it goes, what
+the operator can technically see, and where to write. Google requires the first
+two before an OAuth app can leave testing; the connector directories require all
+three; and a service holding other people's API keys owes them the statement
 regardless.
 
 There is no catch-all route: this is not a single-page app, and an undeclared
@@ -287,7 +291,12 @@ same bearer token as `/mcp`:
 reading, saving and removing a person's attached Seerr, but — as already noted
 above — it authenticates with the browser session cookie set at `/account`, not
 with an MCP access token: an assistant holding a token must not be able to read
-or rewrite which Seerr it talks to. `DELETE /api/v1/account/session` ends that
+or rewrite which Seerr it talks to. `DELETE /api/v1/account` is "Delete my
+account": in one call (one transaction on Postgres) it removes the attached
+Seerr, every refresh token the person has granted to any assistant, any login
+in flight and the resolve counters, then ends the browser session that asked.
+Access tokens already issued are stateless and live out their hour; nothing
+they reach still exists. `DELETE /api/v1/account/session` ends that
 browser session — it signs the person out of `/account` only, clearing the
 `seerrsense_session` cookie and revoking it server-side. It does not touch any
 MCP grant: refreshing or using an existing Claude/ChatGPT connection keeps

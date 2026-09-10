@@ -33,7 +33,7 @@
 <body>
 <header class="wrap topbar">
   <a class="brand" href="/">SeerrSense</a>
-  <nav class="topbar-links"><a href="/">Home</a> <a href="/privacy">Privacy</a></nav>
+  <nav class="topbar-links"><a href="/">Home</a> <a href="/privacy">Privacy</a> <a href="/support">Support</a></nav>
 </header>
 
 <main>
@@ -84,6 +84,17 @@
         <button class="btn btn-secondary" type="button" id="disconnect" hidden>Disconnect</button>
       </div>
     </form>
+
+    <details class="field" id="danger" style="margin-top:40px">
+      <summary>Delete my account</summary>
+      <p class="hint" style="margin-top:12px">Removes everything this server holds about you: the
+        attached Seerr and its key, every assistant's sign-in, and the usage counters. Your Seerr
+        itself and the requests already filed there are untouched. This cannot be undone.</p>
+      <div class="row">
+        <button class="btn btn-secondary" type="button" id="delete-account">Delete my account</button>
+        <button class="btn btn-primary" type="button" id="delete-confirm" hidden>Yes, delete everything</button>
+      </div>
+    </details>
   </div>
 </main>
 
@@ -215,6 +226,25 @@
     form.reset();
     disconnect.hidden = true;
     renderStatus({ email: signedInEmail, connected: false, fallback: body.fallback });
+  });
+
+  // Two clicks, both on this page: no browser dialog, which some embedded
+  // views suppress, and no way to reach the destructive call by accident.
+  var deleteAccount = document.getElementById("delete-account");
+  var deleteConfirm = document.getElementById("delete-confirm");
+  deleteAccount.addEventListener("click", function () {
+    deleteAccount.hidden = true;
+    deleteConfirm.hidden = false;
+  });
+  deleteConfirm.addEventListener("click", async function () {
+    deleteConfirm.disabled = true;
+    var response = await fetch("/api/v1/account", { method: "DELETE", credentials: "same-origin" });
+    if (response.status === 401) return showSignedOut();
+    if (!response.ok) {
+      deleteConfirm.disabled = false;
+      return show("Could not delete the account. Try again, or write to support.", "bad");
+    }
+    showSignedOut("Your account and everything stored with it have been deleted.");
   });
 
   signOut.addEventListener("click", async function () {

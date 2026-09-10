@@ -176,6 +176,11 @@ async function signIn(app: any, email: string = ALLOWED_EMAIL): Promise<string> 
 
 /** A real MCP access token for the same person. */
 async function mcpTokenFor(app: any, email: string = ALLOWED_EMAIL): Promise<string> {
+  return (await mcpGrantFor(app, email)).access_token;
+}
+
+/** The whole token response: access token and the refresh token that outlives it. */
+async function mcpGrantFor(app: any, email: string = ALLOWED_EMAIL): Promise<{ access_token: string; refresh_token: string }> {
   currentEmail = email;
   const verifier = makeVerifier();
   const authorize = await app.inject({
@@ -206,7 +211,7 @@ async function mcpTokenFor(app: any, email: string = ALLOWED_EMAIL): Promise<str
       client_id: `${ISSUER}/account`, code_verifier: verifier,
     },
   });
-  return JSON.parse(token.payload).access_token;
+  return JSON.parse(token.payload);
 }
 
 describe("the account page", () => {
@@ -652,6 +657,116 @@ describe("what the account page reports", () => {
       (await app.inject({ method: "GET", url: "/api/v1/account/connection", headers: { cookie } })).payload,
     );
     expect(after.fallback).toBe(deletedBody.fallback);
+    await app.close();
+  });
+});
+
+describe("deleting the account", () => {
+  it("removes the connection and every grant, ends the session, and answers 401 afterwards", async () => {
+    const app = await makeApp();
+    const cookie = await signIn(app, ALLOWED_EMAIL);
+    seerrAnswers = { ok: true, body: { displayName: "Owner" } };
+    const put = await app.inject({
+      method: "PUT", url: "/api/v1/account/connection", headers: { cookie },
+      payload: { seerrUrl: "https://mine.example", apiKey: "key-1" },
+    });
+    expect(put.statusCode, put.payload).toBe(200);
+    // An assistant's grant for the same person, so deletion has something to
+    // sign out; and a second browser, so it has a second session to end.
+    const grant = await mcpGrantFor(app, ALLOWED_EMAIL);
+    const otherDevice = await signIn(app, ALLOWED_EMAIL);
+    // iat is whole seconds: let the second turn so the other device's cookie
+    // is unambiguously older than the deletion.
+    await new Promise((r) => setTimeout(r, 1100 - (Date.now() % 1000)));
+    const refresh = () => app.inject({
+      method: "POST", url: "/oauth/token",
+      headers: { "content-type": "application/x-www-form-urlencoded" },
+      payload: new URLSearchParams({
+        grant_type: "refresh_token", refresh_token: grant.refresh_token, client_id: `${ISSUER}/account`,
+      }).toString(),
+    });
+
+    const del = await app.inject({ method: "DELETE", url: "/api/v1/account", headers: { cookie } });
+    expect(del.statusCode, del.payload).toBe(200);
+    expect(JSON.parse(del.payload)).toEqual({ deleted: true });
+    const setCookie = del.headers["set-cookie"] as string | string[];
+    const raw = Array.isArray(setCookie) ? setCookie[0] : setCookie;
+    expect(raw).toMatch(/Expires=|Max-Age=0/);
+
+    // The session that asked is gone, and so is the other device's.
+    expect((await app.inject({ method: "GET", url: "/api/v1/account/connection", headers: { cookie } })).statusCode).toBe(401);
+    expect((await app.inject({ method: "GET", url: "/api/v1/account/connection", headers: { cookie: otherDevice } })).statusCode).toBe(401);
+    // The assistant's grant is gone: the refresh token no longer redeems.
+    const redeem = await refresh();
+    expect(redeem.statusCode).toBe(400);
+    expect(JSON.parse(redeem.payload).error).toBe("invalid_grant");
+    // Signing in again finds no connection: the row was deleted, not hidden.
+    const again = await signIn(app, ALLOWED_EMAIL);
+    const after = await app.inject({ method: "GET", url: "/api/v1/account/connection", headers: { cookie: again } });
+    expect(JSON.parse(after.payload).connected).toBe(false);
+    await app.close();
+  });
+
+  it("refuses without a session, like the rest of the account API", async () => {
+    const app = await makeApp();
+    expect((await app.inject({ method: "DELETE", url: "/api/v1/account" })).statusCode).toBe(401);
+    await app.close();
+  });
+
+  // The route sits off the bearer gate because it authenticates with the
+  // cookie; that must not become "or with a token". An assistant holding a
+  // seerr:read grant must not be able to delete its owner's account.
+  it("does not accept an MCP access token, in the header or pasted into the cookie", async () => {
+    const app = await makeApp();
+    const accessToken = await mcpTokenFor(app, ALLOWED_EMAIL);
+    expect((await app.inject({
+      method: "DELETE", url: "/api/v1/account", headers: { authorization: `Bearer ${accessToken}` },
+    })).statusCode).toBe(401);
+    expect((await app.inject({
+      method: "DELETE", url: "/api/v1/account", headers: { cookie: `seerrsense_session=${accessToken}` },
+    })).statusCode).toBe(401);
+    await app.close();
+  });
+
+  // A cookie with no iat cannot be placed relative to the deletion, so it is
+  // refused once its subject has ever been deleted.
+  it("refuses a pre-jti cookie for a subject that was deleted", async () => {
+    const app = await makeApp();
+    const cookie = await signIn(app, ALLOWED_EMAIL);
+    expect((await app.inject({ method: "DELETE", url: "/api/v1/account", headers: { cookie } })).statusCode).toBe(200);
+    const legacy = await new SignJWT({ email: ALLOWED_EMAIL })
+      .setProtectedHeader({ alg: "HS256", typ: "JWT" })
+      .setIssuer(ISSUER)
+      .setAudience(`${ISSUER}/account`)
+      .setSubject("google:google-sub-1")
+      .setExpirationTime(Math.floor(Date.now() / 1000) + 3600)
+      .sign(new TextEncoder().encode("x".repeat(48)));
+    const response = await app.inject({
+      method: "GET", url: "/api/v1/account/connection", headers: { cookie: `seerrsense_session=${legacy}` },
+    });
+    expect(response.statusCode).toBe(401);
+    await app.close();
+  });
+
+  // Google's subject is stable across deletions, and deletion clears the
+  // resolve counter, so an unmetered route would be a daily budget reset.
+  it("is metered per IP like the connection PUT", async () => {
+    const app = await makeApp();
+    const statuses: number[] = [];
+    for (let i = 0; i < 6; i++) {
+      statuses.push((await app.inject({ method: "DELETE", url: "/api/v1/account" })).statusCode);
+    }
+    expect(statuses.slice(0, 5)).toEqual([401, 401, 401, 401, 401]);
+    expect(statuses[5]).toBe(429);
+    await app.close();
+  });
+
+  it("is offered on the page, behind a second click", async () => {
+    const app = await makeApp();
+    const { payload } = await app.inject({ method: "GET", url: "/account" });
+    expect(payload).toContain('id="delete-account"');
+    expect(payload).toContain('id="delete-confirm"');
+    expect(payload).not.toContain("confirm(");
     await app.close();
   });
 });

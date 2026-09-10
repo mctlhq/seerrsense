@@ -21,13 +21,13 @@
 <body>
 <header class="wrap topbar">
   <a class="brand" href="/">SeerrSense</a>
-  <nav class="topbar-links"><a href="/">Home</a> <a href="/terms">Terms</a></nav>
+  <nav class="topbar-links"><a href="/">Home</a> <a href="/terms">Terms</a> <a href="/support">Support</a></nav>
 </header>
 
 <main>
   <p class="eyebrow">Privacy</p>
   <h1 style="font-size:clamp(28px,4vw,40px)">What SeerrSense does with your data</h1>
-  <p class="updated">Last updated 9 September 2026</p>
+  <p class="updated">Last updated 10 September 2026</p>
 
   <p>SeerrSense sits between an AI assistant and your own Overseerr or Jellyseerr. It holds as
     little as it can, and this page says plainly what that is.</p>
@@ -56,6 +56,11 @@
           <td class="muted">Sign-ins in progress</td>
           <td class="muted">To carry one login from Google back to the client that started it</td>
           <td class="muted">10 minutes</td>
+        </tr>
+        <tr>
+          <td class="muted">A daily count of language-model lookups, per account</td>
+          <td class="muted">To cap what one account can spend on the model each day</td>
+          <td class="muted">7 days</td>
         </tr>
       </tbody>
     </table>
@@ -97,12 +102,19 @@
 
   <h2>Removing your data</h2>
   <ul>
-    <li>Open <a href="/account">your account page</a> and press <strong>Disconnect</strong>. The
+    <li>To remove everything at once, open <a href="/account">your account page</a> and press
+      <strong>Delete my account</strong>. The attached Seerr and its key, every assistant's
+      sign-in, and the usage counters are deleted immediately, in one step, and nothing is
+      kept in a backup queue afterwards. One thing remains for up to eight hours: a note
+      that your account identifier was deleted at that moment, which is what keeps any
+      browser still signed in on another device from acting on the account. It carries
+      nothing else and expires on its own. No e-mail is needed.</li>
+    <li>To keep the account but detach the Seerr, press <strong>Disconnect</strong> instead. The
       stored address and key are deleted immediately.</li>
-    <li>Remove the connector in your assistant, which stops it holding tokens for this server.</li>
-    <li>Revoke this application's access to your Google account at
+    <li>Remove the connector in your assistant as well, which stops it holding tokens for this
+      server, and revoke this application's access to your Google account at
       <a href="https://myaccount.google.com/permissions">myaccount.google.com/permissions</a>.</li>
-    <li>To have everything associated with your account removed, write to the address below.</li>
+    <li>If anything about that does not work, write to the address below and it will be done by hand.</li>
   </ul>
 
   <h2>Contact</h2>
@@ -112,7 +124,7 @@
 <footer class="wrap">
   <div class="footer-row">
     <span>SeerrSense — part of the <a href="https://mctl.ai">mctl</a> platform.</span>
-    <span><a href="/terms">Terms</a> · <a href="https://github.com/mctlhq/seerrsense">Source</a></span>
+    <span><a href="/terms">Terms</a> · <a href="/support">Support</a> · <a href="https://github.com/mctlhq/seerrsense">Source</a></span>
   </div>
 </footer>
 </body>

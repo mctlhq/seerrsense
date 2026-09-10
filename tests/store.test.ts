@@ -271,6 +271,37 @@ describe.each(stores)("%s", (name, make) => {
     expect(await store.getUserConnection(subject)).toBeUndefined();
   });
 
+  it("forgets a whole person in one call, and nobody else", async () => {
+    await fresh();
+    const gone = id("google");
+    const stays = id("google");
+    await store.putUserConnection(connection({ subject: gone }));
+    await store.putUserConnection(connection({ subject: stays }));
+    const goneHash = id("hash");
+    const staysHash = id("hash");
+    await store.putRefreshToken(refresh({ tokenHash: goneHash, familyId: id("fam"), subject: gone }));
+    await store.putRefreshToken(refresh({ tokenHash: staysHash, familyId: id("fam"), subject: stays }));
+    const goneCode = id("code");
+    await store.putAuthCode(authCode({ code: goneCode, subject: gone }));
+    const goneState = id("state");
+    await store.putPendingAuth(pending({ state: goneState, subject: gone, email: "gone@example.com" }));
+    await store.countResolve(gone, "2026-09-10");
+    await store.countResolve(stays, "2026-09-10");
+
+    await store.deleteSubject(gone);
+
+    expect(await store.getUserConnection(gone)).toBeUndefined();
+    expect(await store.getRefreshToken(goneHash)).toBeUndefined();
+    expect(await store.takeAuthCode(goneCode)).toBeUndefined();
+    expect(await store.takePendingAuth(goneState)).toBeUndefined();
+    // A fresh count after deletion starts from one again.
+    expect(await store.countResolve(gone, "2026-09-10")).toBe(1);
+
+    expect(await store.getUserConnection(stays)).toBeDefined();
+    expect(await store.getRefreshToken(staysHash)).toBeDefined();
+    expect(await store.countResolve(stays, "2026-09-10")).toBe(2);
+  });
+
   it("keeps two people apart", async () => {
     await fresh();
     const mine = id("google");
@@ -287,6 +318,27 @@ describe.each(stores)("%s", (name, make) => {
     expect(await store.isSessionRevoked(jti)).toBe(false);
     await store.revokeSession(jti, Date.now() + 60_000);
     expect(await store.isSessionRevoked(jti)).toBe(true);
+  });
+
+  it("ends every session a subject was issued up to a moment, and none issued after", async () => {
+    await fresh();
+    const subject = id("google");
+    const other = id("google");
+    const at = Date.now();
+    await store.revokeSubjectSessions(subject, at, at + 60_000);
+    expect(await store.isSubjectSessionRevoked(subject, at - 1)).toBe(true);
+    expect(await store.isSubjectSessionRevoked(subject, at)).toBe(true);
+    expect(await store.isSubjectSessionRevoked(subject, at + 1)).toBe(false);
+    expect(await store.isSubjectSessionRevoked(other, at - 1)).toBe(false);
+    // A second, earlier revocation never narrows the first.
+    await store.revokeSubjectSessions(subject, at - 1000, at + 30_000);
+    expect(await store.isSubjectSessionRevoked(subject, at)).toBe(true);
+    // And it is swept with the rest once it can matter to no cookie.
+    const stale = id("google");
+    await store.revokeSubjectSessions(stale, at, at - 1);
+    await store.purgeExpired();
+    expect(await store.isSubjectSessionRevoked(stale, at - 1)).toBe(false);
+    expect(await store.isSubjectSessionRevoked(subject, at)).toBe(true);
   });
 
   it("purgeExpired sweeps a revocation past its expiry but leaves a live one", async () => {

@@ -2,7 +2,16 @@ import { randomUUID } from "node:crypto";
 import { SignJWT, jwtVerify } from "jose";
 
 export const SESSION_COOKIE = "seerrsense_session";
-const SESSION_TTL_SECONDS = 8 * 3600;
+export const SESSION_TTL_SECONDS = 8 * 3600;
+
+/** What a revocation check is given: enough to refuse one cookie by its
+ * `jti`, or every cookie a subject was issued before a moment. */
+export interface SessionRevocationCheck {
+  id?: string;
+  subject: string;
+  /** The token's `iat`, in epoch milliseconds. */
+  issuedAt?: number;
+}
 
 export interface Session {
   subject: string;
@@ -45,9 +54,10 @@ export async function readSession(
   cookie: string | undefined,
   key: Uint8Array,
   issuer: string,
-  /** Injectable so a revoked `jti` (sign-out) refuses a replayed cookie.
-   * Absent means every cookie is trusted statelessly, as before. */
-  isRevoked?: (id: string) => Promise<boolean>,
+  /** Injectable so a revoked `jti` (sign-out), or a subject whose every
+   * session was ended (account deletion), refuses a replayed cookie. Absent
+   * means every cookie is trusted statelessly, as before. */
+  isRevoked?: (check: SessionRevocationCheck) => Promise<boolean>,
 ): Promise<Session | undefined> {
   if (!cookie) return undefined;
   try {
@@ -57,9 +67,17 @@ export async function readSession(
       algorithms: ["HS256"],
     });
     if (typeof payload.sub !== "string" || typeof payload.email !== "string") return undefined;
-    // A cookie issued before sessions carried a jti has none to check —
-    // accepted as-is until it expires.
-    if (typeof payload.jti === "string" && isRevoked && (await isRevoked(payload.jti))) {
+    // A cookie issued before sessions carried a jti cannot be revoked on its
+    // own, but it still names its subject and its issue time, so ending every
+    // session of that subject reaches it too.
+    if (
+      isRevoked &&
+      (await isRevoked({
+        id: typeof payload.jti === "string" ? payload.jti : undefined,
+        subject: payload.sub,
+        issuedAt: typeof payload.iat === "number" ? payload.iat * 1000 : undefined,
+      }))
+    ) {
       return undefined;
     }
     return {
