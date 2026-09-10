@@ -1,5 +1,24 @@
 # Changelog
 
+## [1.9.0](https://github.com/mctlhq/seerrsense/compare/1.8.0...1.9.0) (2026-09-10)
+
+
+### Features
+
+* **account:** self-service deletion, a support page, a listing icon, and no PII in logs ([83d386a](https://github.com/mctlhq/seerrsense/commit/83d386a4dcbb03743bcc9f6f03713fbb90749771))
+* **account:** self-service deletion, a support page, a listing icon, and no PII in logs ([194883f](https://github.com/mctlhq/seerrsense/commit/194883f95c047afb1857f720254ddb27360f7ea3))
+* **mcp:** annotate tools and shape results for the connector directories ([b96a400](https://github.com/mctlhq/seerrsense/commit/b96a400527fe009bf05751c5ed330198ed2326fa))
+* **mcp:** annotate tools and shape results for the connector directories ([04d173e](https://github.com/mctlhq/seerrsense/commit/04d173e661b2bb497695a13807842841216f3f50))
+
+
+### Bug Fixes
+
+* **account:** end every session on deletion, key the e-mail digest, meter the route ([9af49f5](https://github.com/mctlhq/seerrsense/commit/9af49f5a7a2dcf25c255ce39611659b3f2fceb25))
+* **account:** fail closed on an iat-less cookie, revoke before deleting, label the limiter ([ab579b2](https://github.com/mctlhq/seerrsense/commit/ab579b2ad8e35588d5dad05b6cfaba19f23b8415))
+* **mcp:** name a rejected key from a per-user Seerr, and close the review's P3s ([daf2a3d](https://github.com/mctlhq/seerrsense/commit/daf2a3dcada49e454c11a900c7d648d06b9bb274))
+* **mcp:** name whose Seerr failed, treat every 4xx as an error, and clean up the legacy flag in tests ([75db6fa](https://github.com/mctlhq/seerrsense/commit/75db6fa23719d61d93dee428bfa96f133cace6a5))
+* **mcp:** say who can fix a Seerr failure, and what a 2xx non-answer means ([095d8ee](https://github.com/mctlhq/seerrsense/commit/095d8ee970d729cf6f78679cc6e9db7172714c7b))
+
 ## [1.8.0](https://github.com/mctlhq/seerrsense/compare/1.7.0...1.8.0) (2026-09-09)
 
 
