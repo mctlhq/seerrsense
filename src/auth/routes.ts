@@ -1,4 +1,5 @@
 import { createHmac } from "node:crypto";
+import { describeError } from "../core/errors.js";
 import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 import { z } from "zod";
 import { ClientResolutionError, ClientResolver, isAllowedRedirectUri } from "./clients.js";
@@ -379,7 +380,7 @@ export function registerOAuthRoutes(
     try {
       identity = await google.exchangeCode(query.code, pending.googleVerifier, pending.googleNonce);
     } catch (error) {
-      request.log.warn({ err: error }, "Google authentication failed");
+      request.log.warn({ err: describeError(error) }, "Google authentication failed");
       return redirectError(reply, pending.redirectUri, "access_denied",
         "Google authentication failed", pending.clientState, config.issuer);
     }

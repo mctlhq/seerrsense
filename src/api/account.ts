@@ -7,6 +7,7 @@ import type { AuthStore } from "../auth/store.js";
 import { SeerrAccessChallengeError, SeerrClient, SeerrUnreachableError } from "../providers/seerr/client.js";
 import { assertPublicSeerrUrl, BlockedAddressError } from "../providers/seerr/guard.js";
 import type { TenantResolver } from "../providers/seerr/tenants.js";
+import { describeError } from "../core/errors.js";
 
 const ConnectionSchema = z.object({
   seerrUrl: z.string().url().max(2048),
@@ -149,7 +150,7 @@ export function registerAccountRoutes(
       seerrUser = await candidate.describeSelf();
     } catch (error) {
       void candidate.close();
-      request.log.info({ err: error }, "rejected a Seerr connection that did not answer");
+      request.log.info({ err: describeError(error) }, "rejected a Seerr connection that did not answer");
       if (error instanceof SeerrAccessChallengeError) {
         return reply.status(400).send({
           error:

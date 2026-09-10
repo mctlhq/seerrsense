@@ -12,6 +12,7 @@ import { SeerrAccessChallengeError, SeerrUnreachableError } from "../providers/s
 import type { AuthStore } from "../auth/store.js";
 import { config } from "../core/config.js";
 import { SCOPE_REQUEST } from "../auth/config.js";
+import { describeError } from "../core/errors.js";
 
 export interface McpBudget {
   store: AuthStore;
@@ -188,7 +189,7 @@ export function createSeerrSenseMcpServer(
   scopes?: string[],
   tenant?: Tenant,
   budget?: McpBudget,
-  log: (error: unknown) => void = (error) => console.error("tool failed", error),
+  log: (error: unknown) => void = (error) => console.error("tool failed", describeError(error)),
 ) {
   const mcpServer = new McpServer({
     name: "SeerrSense",

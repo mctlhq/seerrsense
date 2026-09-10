@@ -324,8 +324,18 @@ test("get_media and resolve_media answer within their output schemas", async () 
 
 // Anything unrecognised may carry a provider URL or an upstream body; the
 // assistant gets a generic sentence and the detail goes to the log.
-test("an unknown failure is not relayed to the caller", async () => {
-  householdSeerr.search.mockRejectedValueOnce(new Error("APICallError: https://api.provider.example/v1 answered 500: {\"secret\":true}"));
+test("an unknown failure is not relayed to the caller, and the log gets its identity only", async () => {
+  const failure = Object.assign(new Error("APICallError: https://api.provider.example/v1 answered 500"), {
+    name: "APICallError",
+    requestBodyValues: { messages: [{ role: "user", content: "that film where the guy forgets everything" }] },
+    responseBody: "{\"secret\":true}",
+    cause: new Error("getaddrinfo ENOTFOUND api.provider.example"),
+  });
+  householdSeerr.search.mockRejectedValueOnce(failure);
+  const logged: unknown[] = [];
+  const spy = vi.spyOn(app.log, "error").mockImplementation((...args: unknown[]) => {
+    logged.push(args[0]);
+  });
   const response = await app.inject({
     method: "POST",
     url: "/mcp",
@@ -336,6 +346,66 @@ test("an unknown failure is not relayed to the caller", async () => {
   expect(body.result.isError).toBe(true);
   expect(body.result.content[0].text).toMatch(/Something went wrong on SeerrSense's side/);
   expect(body.result.content[0].text).not.toContain("api.provider.example");
+
+  // What reached the logger: name, message, stack and cause — not the
+  // request body, not the response body.
+  spy.mockRestore();
+  expect(logged).toHaveLength(1);
+  const line = logged[0] as { err: Record<string, unknown> };
+  expect(line.err).toMatchObject({ name: "APICallError", cause: { message: "getaddrinfo ENOTFOUND api.provider.example" } });
+  expect(Object.keys(line.err).sort()).toEqual(["cause", "message", "name", "stack"]);
+  expect(JSON.stringify(line.err)).not.toContain("forgets everything");
+  expect(JSON.stringify(line.err)).not.toContain("secret");
+});
+
+// The log line for an unexplained failure carries the error's identity and
+// nothing it was carrying: a provider error keeps the request body it sent,
+// which is the person's own query.
+test("describeError keeps name, message and stack and drops the payload", async () => {
+  const { describeError } = await import("../src/core/errors.js");
+  const error = Object.assign(new Error("provider answered 500"), {
+    name: "APICallError",
+    requestBodyValues: { messages: [{ role: "user", content: "that film where the guy forgets everything" }] },
+    responseBody: "{\"secret\":true}",
+  });
+  const described = describeError(error);
+  expect(described).toEqual({ name: "APICallError", message: "provider answered 500", stack: error.stack });
+  // Short diagnostic scalars from the allowlist survive; anything else does not.
+  const unreachable = Object.assign(new SeerrUnreachableError("could not reach that Seerr", 502), { detail: "Key (email)=(x) exists" });
+  const kept = describeError(unreachable);
+  expect(kept.upstreamStatus).toBe(502);
+  expect(kept).not.toHaveProperty("detail");
+  expect(JSON.stringify(described)).not.toContain("forgets everything");
+  expect(JSON.stringify(described)).not.toContain("secret");
+  expect(describeError("plain string")).toEqual({ name: "Error", message: "plain string" });
+  // A prototype-less object has no toString; describing it must not throw.
+  expect(describeError(Object.create(null)).message).toBe("an error that could not be printed");
+  // undici's multi-address failure: an AggregateError with an empty message.
+  const aggregate = new AggregateError([new Error("connect ECONNREFUSED 1.2.3.4:443"), new Error("connect ECONNREFUSED [::1]:443")]);
+  const fetchFailed = new TypeError("fetch failed", { cause: aggregate });
+  const walked = describeError(fetchFailed);
+  expect(walked.cause?.errors?.map((e) => e.message)).toEqual(["connect ECONNREFUSED 1.2.3.4:443", "connect ECONNREFUSED [::1]:443"]);
+});
+
+// The one remaining raw-error path was Fastify's own handler.
+test("an unhandled throw in a route is logged described, not raw, and answered generically", async () => {
+  const pgLike = Object.assign(new Error("duplicate key value violates unique constraint"), {
+    detail: "Key (email)=(owner@example.com) already exists.",
+    table: "user_connections",
+  });
+  const logged: unknown[] = [];
+  const spy = vi.spyOn(app.log, "error").mockImplementation((...args: unknown[]) => { logged.push(args[0]); });
+  householdSeerr.search.mockImplementationOnce(() => { throw pgLike; });
+  const response = await app.inject({
+    method: "GET", url: "/api/v1/search?query=x", headers: { authorization: "Bearer secret123" },
+  });
+  spy.mockRestore();
+  expect(response.statusCode).toBe(500);
+  expect(response.payload).not.toContain("owner@example.com");
+  expect(logged).toHaveLength(1);
+  const line = logged[0] as { err: Record<string, unknown> };
+  expect(line.err.message).toBe("duplicate key value violates unique constraint");
+  expect(JSON.stringify(line.err)).not.toContain("owner@example.com");
 });
 
 test("a TV request keeps the seasons asked for when Seerr returns none", async () => {
