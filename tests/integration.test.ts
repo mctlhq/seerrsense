@@ -1,4 +1,5 @@
 import { test, expect, beforeAll } from "vitest";
+import { readFileSync } from "node:fs";
 import Fastify from "fastify";
 import { buildServer } from "../src/api/server.js";
 import { seerrClient } from "../src/providers/seerr/client.js";
@@ -126,6 +127,118 @@ test("MCP POST /mcp listTools", async () => {
   expect(tools.find((t: any) => t.name === "resolve_media")).toBeDefined();
 });
 
+// What the connector directories check before a listing is accepted: every
+// tool carries a title, the read/write hints, and an output schema, and no
+// description tells the model how to behave.
+test("every tool is annotated the way the directories require", async () => {
+  const response = await app.inject({
+    method: "POST",
+    url: "/mcp",
+    headers: { accept: "application/json, text/event-stream", authorization: "Bearer secret123" },
+    payload: { jsonrpc: "2.0", id: 4, method: "tools/list" },
+  });
+  const tools: any[] = JSON.parse(response.payload.match(/data: ({.*})/)![1]).result.tools;
+  const byName = Object.fromEntries(tools.map((t) => [t.name, t]));
+
+  for (const tool of tools) {
+    expect(tool.name.length, tool.name).toBeLessThanOrEqual(64);
+    expect(tool.title, tool.name).toBeTruthy();
+    expect(tool.annotations?.title, tool.name).toBeTruthy();
+    expect(typeof tool.annotations?.readOnlyHint, tool.name).toBe("boolean");
+    expect(typeof tool.annotations?.destructiveHint, tool.name).toBe("boolean");
+    expect(typeof tool.annotations?.openWorldHint, tool.name).toBe("boolean");
+    expect(tool.outputSchema?.type, tool.name).toBe("object");
+    expect(tool.description, tool.name).not.toMatch(/must ask|confirm|download/i);
+  }
+  for (const name of ["search_media", "resolve_media", "get_media"]) {
+    expect(byName[name].annotations.readOnlyHint, name).toBe(true);
+    expect(byName[name].annotations.destructiveHint, name).toBe(false);
+  }
+  expect(byName.request_media.annotations.readOnlyHint).toBe(false);
+  expect(byName.request_media.annotations.destructiveHint).toBe(true);
+  expect(byName.request_media.annotations.idempotentHint).toBe(false);
+});
+
+test("serverInfo carries the package version, not a literal", async () => {
+  const { version } = JSON.parse(readFileSync(new URL("../package.json", import.meta.url), "utf8"));
+  const response = await app.inject({
+    method: "POST",
+    url: "/mcp",
+    headers: { accept: "application/json, text/event-stream", authorization: "Bearer secret123" },
+    payload: {
+      jsonrpc: "2.0",
+      id: 5,
+      method: "initialize",
+      params: { protocolVersion: "2026-07-28", capabilities: {}, clientInfo: { name: "test-client", version: "1.0.0" } },
+    },
+  });
+  const body = JSON.parse(response.payload.match(/data: ({.*})/)![1]);
+  expect(body.result.serverInfo.version).toBe(version);
+  expect(version).not.toBe("1.0.0");
+});
+
+// A tool with an output schema must answer with structuredContent or the SDK
+// refuses the result; and the write tool must not relay the raw Seerr request
+// object, which carries the requesting account's e-mail and avatar.
+test("tool results carry structured content and no account details", async () => {
+  householdSeerr.search.mockResolvedValueOnce([
+    { provider: "tmdb", providerId: 7, mediaType: "movie", title: "Arrival", status: "UNKNOWN" },
+  ]);
+  householdSeerr.getMedia.mockResolvedValueOnce({
+    provider: "tmdb", providerId: 7, mediaType: "movie", title: "Arrival", status: "UNKNOWN",
+  });
+  householdSeerr.requestMedia.mockResolvedValueOnce({
+    id: 42,
+    status: 1,
+    createdAt: "2026-09-10T00:00:00Z",
+    requestedBy: { id: 1, email: "owner@example.com", avatar: "https://gravatar/x" },
+    media: { id: 9, tmdbId: 7 },
+  });
+
+  const call = async (name: string, args: Record<string, unknown>, id: number) => {
+    const response = await app.inject({
+      method: "POST",
+      url: "/mcp",
+      headers: { accept: "application/json, text/event-stream", authorization: "Bearer secret123" },
+      payload: { jsonrpc: "2.0", id, method: "tools/call", params: { name, arguments: args } },
+    });
+    expect(response.statusCode).toBe(200);
+    return JSON.parse(response.payload.match(/data: ({.*})/)![1]);
+  };
+
+  const search = await call("search_media", { query: "arrival" }, 6);
+  expect(search.result.isError).toBeFalsy();
+  expect(search.result.structuredContent.results[0].title).toBe("Arrival");
+
+  const request = await call("request_media", { mediaType: "movie", tmdbId: 7 }, 7);
+  expect(request.error, JSON.stringify(request)).toBeUndefined();
+  expect(request.result.isError).toBeFalsy();
+  expect(request.result.structuredContent).toEqual({
+    requestId: 42,
+    requestStatus: "PENDING",
+    mediaType: "movie",
+    tmdbId: 7,
+  });
+  expect(JSON.stringify(request.result)).not.toContain("owner@example.com");
+  expect(JSON.stringify(request.result)).not.toContain("createdAt");
+});
+
+// Errors are for the person, not the operator: an outage on the Seerr side
+// says what to check rather than which HTTP status the upstream produced.
+test("a Seerr failure is explained in actionable terms", async () => {
+  householdSeerr.search.mockRejectedValueOnce(new Error("Seerr API error: 502 Bad Gateway"));
+  const response = await app.inject({
+    method: "POST",
+    url: "/mcp",
+    headers: { accept: "application/json, text/event-stream", authorization: "Bearer secret123" },
+    payload: { jsonrpc: "2.0", id: 8, method: "tools/call", params: { name: "search_media", arguments: { query: "x" } } },
+  });
+  const body = JSON.parse(response.payload.match(/data: ({.*})/)![1]);
+  expect(body.result.isError).toBe(true);
+  expect(body.result.content[0].text).toMatch(/answered with an error \(502\)/);
+  expect(body.result.content[0].text).not.toContain("Bad Gateway");
+});
+
 // The tenant has to survive the trip into the MCP handler. It travels on the
 // AuthInfo, not on the Node request: the SDK hands the factory a WHATWG Request
 // rebuilt from the incoming one, so anything hung off `request.raw` is lost and
@@ -133,7 +246,9 @@ test("MCP POST /mcp listTools", async () => {
 // catches that — resolving the tenant in isolation always looked correct.
 test("a tool call over /mcp reaches the household Seerr", async () => {
   householdSeerr.search.mockClear();
-  householdSeerr.search.mockResolvedValueOnce([{ id: 7, mediaType: "movie", title: "Arrival" }]);
+  householdSeerr.search.mockResolvedValueOnce([
+    { provider: "tmdb", providerId: 7, mediaType: "movie", title: "Arrival", status: "UNKNOWN" },
+  ]);
 
   const response = await app.inject({
     method: "POST",

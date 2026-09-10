@@ -80,8 +80,6 @@ export function loadAuthSettings(
   legacyToken: string | undefined,
 ): AuthSettings {
   const parsed = OAuthEnvSchema.parse(env);
-  const legacyEnabled = parsed.SEERRSENSE_LEGACY_TOKEN_ENABLED !== "false";
-  const legacy = legacyEnabled ? legacyToken : undefined;
 
   const required = [
     parsed.SEERRSENSE_PUBLIC_URL,
@@ -89,7 +87,20 @@ export function loadAuthSettings(
     parsed.GOOGLE_OAUTH_CLIENT_SECRET,
     parsed.SEERRSENSE_OAUTH_JWT_SIGNING_KEY,
   ];
-  if (required.some((value) => !value)) {
+  const oauthConfigured = required.every(Boolean);
+
+  // The shared token is the only way in when OAuth is not configured, so it
+  // stays on there. Once OAuth is up it is off unless the operator says
+  // otherwise: a static secret that any holder can replay, living next to a
+  // per-person consent flow, is exactly what a directory review flags, and
+  // the previous default of "on until told off" left it accepted on any
+  // deployment that forgot the variable.
+  const legacyEnabled =
+    parsed.SEERRSENSE_LEGACY_TOKEN_ENABLED === undefined
+      ? !oauthConfigured
+      : parsed.SEERRSENSE_LEGACY_TOKEN_ENABLED === "true";
+  const legacy = legacyEnabled ? legacyToken : undefined;
+  if (!oauthConfigured) {
     if (required.some(Boolean)) {
       throw new Error(
         "OAuth is partially configured: SEERRSENSE_PUBLIC_URL, GOOGLE_OAUTH_CLIENT_ID, " +

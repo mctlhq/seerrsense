@@ -437,6 +437,16 @@ export function buildServer(
   fastify.get("/terms", async (_request, reply) =>
     reply.type("text/html; charset=utf-8").sendFile("terms.html"),
   );
+  // Domain verification for the ChatGPT app directory: OpenAI generates a
+  // token per submission and fetches it from this exact path. The value is
+  // configuration rather than a file so a resubmission is an env change, not
+  // a release. Already public through the "/.well-known/" prefix above.
+  if (config.SEERRSENSE_OPENAI_APPS_CHALLENGE) {
+    const challenge = config.SEERRSENSE_OPENAI_APPS_CHALLENGE;
+    fastify.get("/.well-known/openai-apps-challenge", async (_request, reply) =>
+      reply.type("text/plain; charset=utf-8").header("cache-control", "no-store").send(challenge),
+    );
+  }
   fastify.get("/favicon.svg", async (_request, reply) => reply.type("image/svg+xml").sendFile("favicon.svg"));
   fastify.get("/og.png", async (_request, reply) => reply.type("image/png").sendFile("og.png"));
 
