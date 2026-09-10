@@ -53,10 +53,6 @@ const PUBLIC_PREFIXES = [
   "/privacy",
   "/terms",
   "/support",
-  "/account/",
-  "/privacy/",
-  "/terms/",
-  "/support/",
   "/icon-512.png",
   "/robots.txt",
   // The browser has no token yet when it finishes its own PKCE exchange here;
@@ -75,10 +71,19 @@ const PUBLIC_PREFIXES = [
 // refusal of an MCP token, one path segment shorter.
 const SESSION_PREFIXES = ["/api/v1/account/", "/api/v1/account"];
 
+/**
+ * The trailing-slash spellings of the four pages, which redirect to the page.
+ * Kept apart from PUBLIC_PREFIXES on purpose: there an entry ending in "/" is
+ * a prefix, and "/account/" would have opened /account/** to the world. These
+ * are matched exactly, so /account/anything still meets the gate.
+ */
+const PUBLIC_REDIRECTS = ["/account/", "/privacy/", "/terms/", "/support/"];
+
 function isPublic(url: string): boolean {
   // Match on the path only: "/healthz?x=1" is the same route, and the previous
   // exact-equality check refused it.
   const path = url.split("?")[0];
+  if (PUBLIC_REDIRECTS.includes(path)) return true;
   return PUBLIC_PREFIXES.some((prefix) =>
     // "/" is the landing page itself, not a prefix for every route below it.
     prefix.endsWith("/") && prefix !== "/" ? path.startsWith(prefix) : path === prefix,
@@ -521,8 +526,9 @@ export function buildServer(
   // A typed trailing slash on a page is the page. Only these four: the
   // endpoints under /mcp, /oauth/ and /api/ keep exact matching, and a
   // redirect there would be a second answer to a call that expects one.
-  for (const page of ["/account", "/privacy", "/terms", "/support"]) {
-    fastify.get(`${page}/`, async (_request, reply) => reply.redirect(page, 301));
+  for (const withSlash of PUBLIC_REDIRECTS) {
+    const page = withSlash.slice(0, -1);
+    fastify.get(withSlash, async (_request, reply) => reply.redirect(page, 301));
   }
   // What a browser gets at an address that is not a page (see the auth gate
   // for how it arrives here). Anything else that reaches this handler has

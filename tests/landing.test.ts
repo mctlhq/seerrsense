@@ -189,6 +189,15 @@ describe("landing page", () => {
       expect(response.statusCode, page).toBe(301);
       expect(response.headers.location, page).toBe(page);
     }
+    // Exactly those four paths, not the subtrees under them. A sibling of the
+    // redirect, asked for without a token and without an HTML Accept (so the
+    // browser 404 exception does not apply), must meet the gate; this is what
+    // fails if the four ever become prefixes in PUBLIC_PREFIXES again.
+    for (const path of ["/account/x", "/privacy/anything", "/terms/2026", "/support/faq", "/account//"]) {
+      const response = await app.inject({ method: "GET", url: path, headers: { accept: "application/json" } });
+      expect(response.statusCode, path).toBe(401);
+      expect(response.headers["www-authenticate"], path).toContain("Bearer");
+    }
     // The endpoints keep exact matching: a slash there is an undeclared
     // path and meets the gate like any other.
     for (const path of ["/mcp/", "/api/v1/"]) {
