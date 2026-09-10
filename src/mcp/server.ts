@@ -184,11 +184,23 @@ export function explain(error: unknown, ctx: ExplainContext, log: (error: unknow
  * database-backed store to count against — the daily resolve ceiling then
  * simply does not apply.
  */
+/**
+ * What a failed tool call is allowed to leave in the log: the error's class,
+ * its message and where it was thrown. Not the object itself — the AI SDK's
+ * APICallError, for one, carries the request body it sent, which is the
+ * person's own resolve_media query, and pino's error serializer would copy
+ * every such enumerable field into the line.
+ */
+export function describeError(error: unknown): { name: string; message: string; stack?: string } {
+  if (error instanceof Error) return { name: error.name, message: error.message, stack: error.stack };
+  return { name: "Error", message: String(error) };
+}
+
 export function createSeerrSenseMcpServer(
   scopes?: string[],
   tenant?: Tenant,
   budget?: McpBudget,
-  log: (error: unknown) => void = (error) => console.error("tool failed", error),
+  log: (error: unknown) => void = (error) => console.error("tool failed", describeError(error)),
 ) {
   const mcpServer = new McpServer({
     name: "SeerrSense",

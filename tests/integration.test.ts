@@ -338,6 +338,23 @@ test("an unknown failure is not relayed to the caller", async () => {
   expect(body.result.content[0].text).not.toContain("api.provider.example");
 });
 
+// The log line for an unexplained failure carries the error's identity and
+// nothing it was carrying: a provider error keeps the request body it sent,
+// which is the person's own query.
+test("describeError keeps name, message and stack and drops the payload", async () => {
+  const { describeError } = await import("../src/mcp/server.js");
+  const error = Object.assign(new Error("provider answered 500"), {
+    name: "APICallError",
+    requestBodyValues: { messages: [{ role: "user", content: "that film where the guy forgets everything" }] },
+    responseBody: "{\"secret\":true}",
+  });
+  const described = describeError(error);
+  expect(described).toEqual({ name: "APICallError", message: "provider answered 500", stack: error.stack });
+  expect(JSON.stringify(described)).not.toContain("forgets everything");
+  expect(JSON.stringify(described)).not.toContain("secret");
+  expect(describeError("plain string")).toEqual({ name: "Error", message: "plain string" });
+});
+
 test("a TV request keeps the seasons asked for when Seerr returns none", async () => {
   householdSeerr.getMedia.mockResolvedValueOnce({
     provider: "tmdb", providerId: 95396, mediaType: "tv", title: "Severance", status: "UNKNOWN",

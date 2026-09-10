@@ -5,7 +5,7 @@ import fastifyCookie from "@fastify/cookie";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 import Fastify, { type FastifyRequest } from "fastify";
-import { createSeerrSenseMcpServer } from "../mcp/server.js";
+import { createSeerrSenseMcpServer, describeError } from "../mcp/server.js";
 import { createDefaultSeerrClient } from "../providers/seerr/client.js";
 import { notConnectedMessage, TenantResolver, type Tenant } from "../providers/seerr/tenants.js";
 import { MediaParamsSchema, RequestBodySchema } from "../core/media.js";
@@ -607,7 +607,9 @@ export function buildServer(
     const tenant = await tenants.resolve(ctx.authInfo);
     const budget = authStore ? { store: authStore, options: resolveBudget } : undefined;
     return createSeerrSenseMcpServer(ctx.authInfo?.scopes, tenant, budget, (error) =>
-      fastify.log.error({ err: error }, "a tool call failed for a reason the caller was not told"),
+      // Name, message and stack only: the raw object may carry the request
+      // it was making, and with it the person's query.
+      fastify.log.error({ err: describeError(error) }, "a tool call failed for a reason the caller was not told"),
     );
   });
   const nodeHandler = toNodeHandler(handler);

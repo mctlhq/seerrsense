@@ -713,6 +713,29 @@ describe("deleting the account", () => {
     await app.close();
   });
 
+  // The order is load-bearing: with the data gone first, another device's
+  // still-valid cookie has one round trip in which to write a fresh
+  // connection row for a subject who asked to be forgotten.
+  it("ends every session before deleting the data", async () => {
+    const { MemoryAuthStore } = await import("../src/auth/store.js");
+    const store = new MemoryAuthStore();
+    const order: string[] = [];
+    for (const method of ["revokeSubjectSessions", "revokeSession", "deleteSubject"] as const) {
+      const original = (store as any)[method].bind(store);
+      (store as any)[method] = async (...args: unknown[]) => {
+        order.push(method);
+        return original(...args);
+      };
+    }
+    const app = buildServer({ fetchImpl: stubFetch as unknown as typeof fetch, lookup: publicLookup, store });
+    await app.ready();
+    const cookie = await signIn(app, ALLOWED_EMAIL);
+    expect((await app.inject({ method: "DELETE", url: "/api/v1/account", headers: { cookie } })).statusCode).toBe(200);
+    expect(order.indexOf("revokeSubjectSessions")).toBeLessThan(order.indexOf("deleteSubject"));
+    expect(order.indexOf("revokeSession")).toBeLessThan(order.indexOf("deleteSubject"));
+    await app.close();
+  });
+
   // The route sits off the bearer gate because it authenticates with the
   // cookie; that must not become "or with a token". An assistant holding a
   // seerr:read grant must not be able to delete its owner's account.
