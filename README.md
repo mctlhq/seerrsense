@@ -131,6 +131,7 @@ seerrsense stdio
 | `SEERR_API_KEY` | no | API key for the household Overseerr/Jellyseerr. Optional: a signed-in person can attach their own instead |
 | `SEERR_URL` | no | Seerr base URL, default `http://127.0.0.1:5055` |
 | `SEERRSENSE_LOCALE` | no | `Accept-Language` for Seerr, default `en-US` |
+| `SEERR_REQUEST_TIMEOUT_MS` | no | Ceiling on one request to a Seerr, default 20000. A GET that gets no answer within it is retried once; writes are never retried |
 | `SEERRSENSE_AUTH_TOKEN` | HTTP only | Shared bearer token. Not needed in stdio mode |
 | `PORT` | no | default `8787` |
 | `NEBIUS_API_KEY`, `NEBIUS_MODEL` | no | enable the semantic resolver |
