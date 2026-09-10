@@ -1,3 +1,4 @@
+import { readFileSync } from "node:fs";
 import { describe, it, expect, beforeAll, vi } from "vitest";
 import { buildServer } from "../src/api/server.js";
 
@@ -231,8 +232,12 @@ describe("landing page", () => {
     }
     const css = await app.inject({ method: "GET", url: "/assets/components.css" });
     expect(css.payload).toMatch(/\.btn\[hidden\]\s*\{\s*display: none;/);
-    const callback = await app.inject({ method: "GET", url: "/account/callback?code=x" });
-    expect(callback.payload).not.toContain("site.js");
+    // /account/callback is registered only with OAuth configured, which this
+    // suite is not, so the file is read from disk: an inject() here would
+    // assert against the 404 page and pass whatever the file said.
+    const callback = readFileSync(new URL("../public/account-callback.html", import.meta.url), "utf8");
+    expect(callback).toContain('localStorage.getItem("seerrsense-theme")');
+    expect(callback).not.toContain("site.js"); // mutation-checked: adding the tag back fails this
     // The account page's own <style> must come after the shared sheets, or
     // its narrower column loses to main.page in components.css on source order.
     const account = await app.inject({ method: "GET", url: "/account" });
