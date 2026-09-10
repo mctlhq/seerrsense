@@ -1,5 +1,16 @@
 # Changelog
 
+## [1.9.1](https://github.com/mctlhq/seerrsense/compare/1.9.0...1.9.1) (2026-09-10)
+
+
+### Bug Fixes
+
+* describe errors from one core module, walk AggregateError, and own Fastify's error handler ([9c547b2](https://github.com/mctlhq/seerrsense/commit/9c547b2be1b61da400494e6dea2d0d09c262f013))
+* **errors:** keep short diagnostic scalars from a fixed allowlist ([4959785](https://github.com/mctlhq/seerrsense/commit/49597852e4bbae46dc7ac0e77c87d76d6fb43582))
+* **mcp:** describe the cause too, never throw while describing, and pin the log line ([392fca4](https://github.com/mctlhq/seerrsense/commit/392fca4337e47e63eab561e01d906dd143e6fc8e))
+* **mcp:** log a failed tool call by name, message and stack, never by the object ([32451d6](https://github.com/mctlhq/seerrsense/commit/32451d616e67670634be14789eedf9b9642c36b4))
+* **mcp:** log a failed tool call by name, message and stack, never by the object ([6249fff](https://github.com/mctlhq/seerrsense/commit/6249fff33413d9b005d310b52db35852627992b4))
+
 ## [1.9.0](https://github.com/mctlhq/seerrsense/compare/1.8.0...1.9.0) (2026-09-10)
 
 
