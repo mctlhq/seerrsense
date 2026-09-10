@@ -107,6 +107,52 @@ pre {
 .theme-toggle[hidden] {
   display: none;
 }
+/* The icon names the theme that is showing: a moon on the dark page, a sun on
+   the light one. Dark is the sheet's default, the system preference applies
+   until someone chooses, and an explicit choice wins over both, in the same
+   order as the tokens themselves. */
+.theme-toggle .icon-sun {
+  display: none;
+}
+@media (prefers-color-scheme: light) {
+  :root:not([data-theme="dark"]) .theme-toggle .icon-moon { display: none; }
+  :root:not([data-theme="dark"]) .theme-toggle .icon-sun { display: inline; }
+}
+:root[data-theme="light"] .theme-toggle .icon-moon { display: none; }
+:root[data-theme="light"] .theme-toggle .icon-sun { display: inline; }
+
+/* ── text pages (account, privacy, terms, support, 404) ─────────────── */
+
+main.page {
+  max-width: 720px;
+  margin: 0 auto;
+  padding: 56px 24px 96px;
+}
+main.page h1 {
+  font-size: clamp(28px, 4vw, 40px);
+}
+main.page h2 {
+  margin-top: 44px;
+}
+main.page p,
+main.page li {
+  color: var(--surface-fg-muted);
+}
+main.page ul,
+main.page ol {
+  padding-left: 22px;
+}
+main.page li {
+  margin-bottom: 10px;
+}
+main.page table {
+  margin-top: 16px;
+}
+.updated {
+  font-family: var(--font-mono);
+  font-size: 13px;
+  color: var(--surface-fg-subtle);
+}
 
 /* ── sections ────────────────────────────────────────────────────────── */
 
@@ -440,7 +486,15 @@ footer a {
     padding-block-start: 52px;
   }
   .topbar-links {
-    gap: 14px;
+    gap: 12px;
+    flex-wrap: wrap;
+    justify-content: flex-end;
+    row-gap: 6px;
+  }
+  /* Six links plus the toggle do not fit beside the brand on a phone; the
+     repository link is in the footer too, so it is the one to fold. */
+  .topbar-links .link-github {
+    display: none;
   }
   .cta-row .btn {
     flex: 1 1 100%;

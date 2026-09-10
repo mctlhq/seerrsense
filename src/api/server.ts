@@ -54,6 +54,7 @@ const PUBLIC_PREFIXES = [
   "/terms",
   "/support",
   "/icon-512.png",
+  "/robots.txt",
   // The browser has no token yet when it finishes its own PKCE exchange here;
   // the route is guarded by the authorization code and verifier it must present.
   "/account/session",
@@ -85,6 +86,11 @@ function isSessionRoute(url: string): boolean {
   return SESSION_PREFIXES.some((prefix) =>
     prefix.endsWith("/") ? path.startsWith(prefix) : path === prefix,
   );
+}
+
+/** An undeclared path, fetched the way a browser fetches a page. */
+function isBrowserNotFound(request: { is404: boolean; method: string; headers: { authorization?: string } }): boolean {
+  return request.is404 && (request.method === "GET" || request.method === "HEAD") && !request.headers.authorization;
 }
 
 /**
@@ -334,6 +340,14 @@ export function buildServer(
   // leaking a 404 that would tell an unauthenticated caller a route exists.
   fastify.addHook("preHandler", async (request, reply) => {
     if (isPublic(request.url) || isSessionRoute(request.url)) return;
+    // A browser at a mistyped address gets the 404 page below instead of the
+    // JSON token challenge: no Authorization header and a plain GET/HEAD is
+    // how a person, not an MCP client, arrives. Every other undeclared request
+    // — a POST, or anything carrying a token — still meets the gate, so an
+    // MCP client that has the endpoint slightly wrong keeps receiving the
+    // challenge that makes it start OAuth, and nothing about which routes
+    // exist is told to a caller who cannot present a token.
+    if (isBrowserNotFound(request)) return;
 
     let auth: AuthInfo;
     try {
@@ -479,6 +493,19 @@ export function buildServer(
   }
   fastify.get("/favicon.svg", async (_request, reply) => reply.type("image/svg+xml").sendFile("favicon.svg"));
   fastify.get("/og.png", async (_request, reply) => reply.type("image/png").sendFile("og.png"));
+  fastify.get("/robots.txt", async (_request, reply) =>
+    reply.type("text/plain; charset=utf-8").sendFile("robots.txt"),
+  );
+  // What a browser gets at an address that is not a page (see the auth gate
+  // for how it arrives here). Anything else that reaches this handler has
+  // already passed the gate with a valid token, so it is a client asking for a
+  // route that does not exist: a JSON 404, no page.
+  fastify.setNotFoundHandler(async (request, reply) => {
+    if (isBrowserNotFound(request)) {
+      return reply.status(404).type("text/html; charset=utf-8").sendFile("404.html");
+    }
+    return reply.status(404).send({ error: "not found" });
+  });
 
   fastify.get("/health", async () => {
     return { status: "ok" };

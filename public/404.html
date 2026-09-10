@@ -3,8 +3,9 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Support — SeerrSense</title>
-<meta name="description" content="How to get help with SeerrSense: what to check first, where to write, and what to include.">
+<title>Page not found — SeerrSense</title>
+<meta name="description" content="This address is not a SeerrSense page.">
+<meta name="robots" content="noindex">
 <link rel="icon" type="image/svg+xml" href="/favicon.svg">
 <link rel="apple-touch-icon" href="/og.png">
 <link rel="preconnect" href="https://fonts.googleapis.com">
@@ -47,50 +48,16 @@
 </header>
 
 <main class="page">
-  <p class="eyebrow">Support</p>
-  <h1>Getting help</h1>
-
-  <p>SeerrSense is run by one person. Write and you will get an answer from the person who
-    runs the server and wrote the code, usually within a couple of days.</p>
-
-  <h2>Check first</h2>
+  <p class="eyebrow">404</p>
+  <h1>There is no page here</h1>
+  <p>The address may have a typo, or it names something that is not a page: the MCP endpoint and
+    the API answer only to a connected assistant, not to a browser.</p>
   <ul>
-    <li><strong>“No Seerr is connected to this account yet.”</strong> Open
-      <a href="/account">/account</a> and attach your Overseerr or Jellyseerr. The page tests the
-      address and API key before saving them.</li>
-    <li><strong>“Could not reach your Seerr.”</strong> The address on <a href="/account">/account</a>
-      must be reachable from the internet. A Seerr behind Cloudflare Access needs its service token
-      in the <em>CF-Access-Client-Id</em> and <em>CF-Access-Client-Secret</em> fields.</li>
-    <li><strong>“That title is already available / pending.”</strong> Working as intended: a request
-      is filed only for something your Seerr does not already have or expect.</li>
-    <li><strong>Sign-in does not finish.</strong> Any Google account with a verified e-mail address
-      can sign in. Remove the connector from your assistant, add
-      <code>https://seerrsense.mctl.ai/mcp</code> again and pick the account you meant; the sign-in
-      runs once more.</li>
-    <li><strong>The assistant shows old tool descriptions.</strong> Clients cache the tool list.
-      In ChatGPT start a new conversation or refresh the app; in claude.ai remove and re-add the
-      connector.</li>
+    <li><a href="/">Home</a> — what SeerrSense is and how to connect it.</li>
+    <li><a href="/account">Account</a> — sign in and attach your Seerr.</li>
+    <li><a href="/support">Support</a> — what to check and where to write.</li>
+    <li><a href="/privacy">Privacy</a> and <a href="/terms">Terms</a>.</li>
   </ul>
-
-  <h2>Where to write</h2>
-  <ul>
-    <li>Bugs and feature requests: <a href="https://github.com/mctlhq/seerrsense/issues">GitHub Issues</a>.
-      Public, searchable, and where fixes are tracked.</li>
-    <li>Anything about your account or your data, including deletion: <a href="mailto:support@mctl.ai">support@mctl.ai</a>.</li>
-  </ul>
-
-  <h2>What to include</h2>
-  <ol>
-    <li>Which assistant (claude.ai, Claude Code, ChatGPT, other) and roughly when it happened.</li>
-    <li>What you asked for and what the assistant said back, word for word if you can.</li>
-    <li>Whether <a href="/account">/account</a> shows your Seerr as connected.</li>
-    <li>Never your API key, your service token, or a password. Nobody here needs them.</li>
-  </ol>
-
-  <h2>Your data</h2>
-  <p>You can remove everything this server holds about you yourself: <a href="/account">/account</a>,
-    then <em>Delete my account</em>. What is stored, and for how long, is on the
-    <a href="/privacy">privacy page</a>.</p>
 </main>
 
 <footer class="wrap">
