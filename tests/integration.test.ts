@@ -238,11 +238,14 @@ test("a rejected key and an Access challenge from a per-user Seerr are named", a
     return JSON.parse(response.payload.match(/data: ({.*})/)![1]).result;
   };
 
+  // The legacy token reaches the household Seerr: the fix is the operator's,
+  // and the person is not sent to a page with nothing to update.
   householdSeerr.search.mockRejectedValueOnce(new SeerrUnreachableError("could not reach that Seerr", 401));
   const rejected = await call(9);
   expect(rejected.isError).toBe(true);
   expect(rejected.content[0].text).toMatch(/rejected the API key/);
-  expect(rejected.content[0].text).toMatch(/account/);
+  expect(rejected.content[0].text).toMatch(/operator/);
+  expect(rejected.content[0].text).not.toMatch(/account/);
 
   householdSeerr.search.mockRejectedValueOnce(new SeerrUnreachableError("could not reach that Seerr"));
   const down = await call(10);
@@ -255,7 +258,61 @@ test("a rejected key and an Access challenge from a per-user Seerr are named", a
   householdSeerr.search.mockRejectedValueOnce(new SeerrAccessChallengeError());
   const access = await call(12);
   expect(access.content[0].text).toMatch(/Cloudflare Access/);
-  expect(access.content[0].text).toMatch(/account/);
+  expect(access.content[0].text).toMatch(/operator/);
+
+  // A 2xx with a body that is not the API (a login page) is not "an error (200)".
+  householdSeerr.search.mockRejectedValueOnce(new SeerrUnreachableError("could not reach that Seerr", 200));
+  const notApi = await call(13);
+  expect(notApi.content[0].text).toMatch(/not with its API \(200\)/);
+  expect(notApi.content[0].text).not.toMatch(/error \(200\)/);
+
+  // A 404 to a search is an address problem; a 404 by id is an unknown title.
+  householdSeerr.search.mockRejectedValueOnce(new SeerrUnreachableError("could not reach that Seerr", 404));
+  const searchMissing = await call(14);
+  expect(searchMissing.content[0].text).toMatch(/API root/);
+  expect(searchMissing.content[0].text).not.toMatch(/TMDB id/);
+});
+
+// The same sentences, addressed to a person who attached the Seerr themselves.
+test("explain() sends an attached user to /account and a household user to the operator", async () => {
+  const { explain } = await import("../src/mcp/server.js");
+  const quiet = () => {};
+  const own = { accountUrl: "https://s.test/account", own: true, byId: false };
+  const household = { ...own, own: false };
+  expect(explain(new SeerrUnreachableError("x", 401), own, quiet)).toBe(
+    "Your Seerr rejected the API key. Update the API key on https://s.test/account.",
+  );
+  expect(explain(new SeerrUnreachableError("x", 401), household, quiet)).toMatch(/operator/);
+  expect(explain(new SeerrUnreachableError("x", 302), own, quiet)).toMatch(/not with its API \(302\).*root of your Seerr/);
+  expect(explain(new SeerrUnreachableError("x", 404), { ...own, byId: true }, quiet)).toMatch(/TMDB id/);
+  expect(explain(new SeerrUnreachableError("x"), own, quiet)).toMatch(/could not reach your Seerr.*https:\/\/s.test\/account/);
+  expect(explain(new SeerrAccessChallengeError(), own, quiet)).toMatch(/service token on https:\/\/s.test\/account/);
+});
+
+// The two schemas not exercised elsewhere: a mismatch would not degrade to
+// text, the SDK refuses the whole result.
+test("get_media and resolve_media answer within their output schemas", async () => {
+  const candidate = { provider: "tmdb", providerId: 27205, mediaType: "movie", title: "Inception", year: 2010, status: "AVAILABLE" };
+  householdSeerr.getMedia.mockResolvedValueOnce(candidate);
+  householdSeerr.search.mockResolvedValueOnce([candidate]);
+  const call = async (name: string, args: Record<string, unknown>, id: number) => {
+    const response = await app.inject({
+      method: "POST",
+      url: "/mcp",
+      headers: { accept: "application/json, text/event-stream", authorization: "Bearer secret123" },
+      payload: { jsonrpc: "2.0", id, method: "tools/call", params: { name, arguments: args } },
+    });
+    return JSON.parse(response.payload.match(/data: ({.*})/)![1]);
+  };
+  const got = await call("get_media", { mediaType: "movie", tmdbId: 27205 }, 15);
+  expect(got.error, JSON.stringify(got)).toBeUndefined();
+  expect(got.result.structuredContent).toMatchObject({ providerId: 27205, status: "AVAILABLE" });
+
+  const resolved = await call("resolve_media", { query: "Inception" }, 16);
+  expect(resolved.error, JSON.stringify(resolved)).toBeUndefined();
+  expect(resolved.result.isError).toBeFalsy();
+  expect(resolved.result.structuredContent).toMatchObject({ candidate: { providerId: 27205 }, confidence: 0.9 });
+  expect(typeof resolved.result.structuredContent.matchReason).toBe("string");
 });
 
 // Anything unrecognised may carry a provider URL or an upstream body; the

@@ -103,25 +103,52 @@ function summariseRequest(
  * internal marker. A reviewer calling each tool expects to learn what to do
  * next, not which layer broke.
  */
-function explain(error: unknown, accountUrl: string, log: (error: unknown) => void): string {
+/** What explain() needs to know about who asked and what they called. */
+export interface ExplainContext {
+  accountUrl: string;
+  /** The person attached this Seerr themselves, so /account is where to fix it. */
+  own: boolean;
+  /** Whether the tool takes a TMDB id (a 404 then means "no such title"). */
+  byId: boolean;
+}
+
+export function explain(error: unknown, ctx: ExplainContext, log: (error: unknown) => void): string {
+  const { accountUrl, own, byId } = ctx;
+  // The household Seerr is the operator's: a signed-in person using it has no
+  // connection of their own, so /account shows them nothing to update.
+  const fixKey = own
+    ? `Update the API key on ${accountUrl}.`
+    : "This is the shared Seerr; its operator needs to update its API key.";
+  const fixAddress = own
+    ? `Check that it is running and that the address on ${accountUrl} is the root of your Seerr.`
+    : "This is the shared Seerr; its operator needs to check it.";
   if (error instanceof SeerrAccessChallengeError) {
-    return `Your Seerr is behind Cloudflare Access. Add its service token on ${accountUrl}.`;
+    return own
+      ? `Your Seerr is behind Cloudflare Access. Add its service token on ${accountUrl}.`
+      : "The shared Seerr is behind Cloudflare Access; its operator needs to add the service token.";
   }
-  // A per-user Seerr answers through fetchUntrusted, which folds every non-2xx
-  // into this one error and keeps the status only on the side. A rotated key
-  // is the common case and needs a different instruction from a dead host.
+  // A per-user Seerr answers through fetchUntrusted, which folds every failure
+  // into this one error and keeps the status only on the side. The status is
+  // not always an upstream error: a refused redirect carries its 3xx, and an
+  // oversized or non-JSON body carries the 2xx it came with — that is what a
+  // login page or a reverse proxy at the wrong path looks like.
   const status =
     error instanceof SeerrUnreachableError
       ? error.upstreamStatus
       : Number(/^Seerr API error: (\d{3})/.exec(error instanceof Error ? error.message : "")?.[1]) || undefined;
-  if (status === 401 || status === 403) {
-    return `Your Seerr rejected the API key. Update it on ${accountUrl}.`;
+  if (status === 401 || status === 403) return `Your Seerr rejected the API key. ${fixKey}`;
+  if (status === 404) {
+    return byId
+      ? "Seerr does not know that title. Check the media type and TMDB id."
+      : `Your Seerr answered 404 to a search, which usually means the address is not its API root. ${fixAddress}`;
   }
-  if (status === 404) return "Seerr does not know that title. Check the media type and TMDB id.";
+  if (status !== undefined && status >= 500) {
+    return `Your Seerr answered with an error (${status}). Try again in a moment.`;
+  }
   if (error instanceof SeerrUnreachableError) {
     return status !== undefined
-      ? `Your Seerr answered with an error (${status}). Try again in a moment.`
-      : `SeerrSense could not reach your Seerr. Check that it is running and that the address on ${accountUrl} is right.`;
+      ? `Your Seerr answered, but not with its API (${status}). ${fixAddress}`
+      : `SeerrSense could not reach your Seerr. ${fixAddress}`;
   }
   if (status !== undefined) return `Your Seerr answered with an error (${status}). Try again in a moment.`;
   if (error instanceof ResolveBudgetError) return error.message;
@@ -172,9 +199,10 @@ export function createSeerrSenseMcpServer(
     isError: true as const,
     content: [{ type: "text" as const, text: notConnectedMessage(config.SEERRSENSE_PUBLIC_URL) }],
   });
-  const failed = (error: unknown) => ({
+  const own = tenant?.source === "own";
+  const failed = (error: unknown, byId = false) => ({
     isError: true as const,
-    content: [{ type: "text" as const, text: explain(error, accountUrl, log) }],
+    content: [{ type: "text" as const, text: explain(error, { accountUrl, own, byId }, log) }],
   });
   const ok = <T extends Record<string, unknown>>(structuredContent: T) => ({
     content: [{ type: "text" as const, text: JSON.stringify(structuredContent, null, 2) }],
@@ -254,7 +282,7 @@ export function createSeerrSenseMcpServer(
         if (!client) return notConnected();
         return ok(await client.getMedia(mediaType, tmdbId));
       } catch (error) {
-        return failed(error);
+        return failed(error, true);
       }
     }
   );
@@ -289,7 +317,7 @@ export function createSeerrSenseMcpServer(
         const raw = await mediaService.requestMediaSafely(payload);
         return ok(summariseRequest(raw, payload));
       } catch (error) {
-        return failed(error);
+        return failed(error, true);
       }
     }
   );

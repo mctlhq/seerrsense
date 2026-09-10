@@ -399,7 +399,10 @@ authorization server.
 - The shared `SEERRSENSE_AUTH_TOKEN` is compared in constant time and, once
   OAuth is configured, **not accepted unless `SEERRSENSE_LEGACY_TOKEN_ENABLED`
   is exactly `true`**. Without OAuth it is the only credential and stays on
-  unless that variable is set to `false`.
+  unless that variable is set to `false`. **Upgrading from 1.8 or earlier:** a
+  deployment with OAuth that never set the variable stops accepting the shared
+  token; any client still configured with it starts getting 401 until it is
+  moved to OAuth or the variable is set to `true`.
 
 ## Development
 
