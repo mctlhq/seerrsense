@@ -19,20 +19,17 @@ export class BlockedAddressError extends Error {
 }
 
 /**
- * The resolver answered about the name and the answer was "no address".
+ * The resolver answered about the name, and the answer was "no address".
  *
  * A subclass rather than a sibling: every existing `instanceof
  * BlockedAddressError` site already treats this as "do not dial that address"
  * and keeps doing so. The account page is the one caller that separates the
- * two, because "check it for a typo" and "that address is not allowed" send
- * a person to different places.
+ * two, because "check it for a typo" and "that address is not allowed" send a
+ * person to different places.
  */
 export class UnresolvableAddressError extends BlockedAddressError {
   readonly code: string;
-  constructor(
-    code = "ENOTFOUND",
-    message = "that address could not be resolved",
-  ) {
+  constructor(code = "ENOTFOUND", message = "that address could not be resolved") {
     super(message);
     this.name = "UnresolvableAddressError";
     this.code = code;
@@ -40,19 +37,16 @@ export class UnresolvableAddressError extends BlockedAddressError {
 }
 
 /**
- * The resolver did not answer at all — upstream SERVFAIL, or, far more often
- * in a container, the cluster DNS saturated or down. Nothing has been learned
- * about the name, so this is not the person's typo and must not be reported
- * as one: the account page answers 503 and invites a retry. Still a
+ * The resolver did not answer at all — an upstream SERVFAIL, or, far more
+ * often in a container, the cluster DNS saturated or down. Nothing has been
+ * learned about the name, so this is not the person's typo and must not be
+ * reported as one: the account page answers 503 and invites a retry. Still a
  * BlockedAddressError, because an address that could not be checked is an
  * address that must not be dialled.
  */
 export class ResolutionUnavailableError extends BlockedAddressError {
   readonly code: string;
-  constructor(
-    code = "EAI_AGAIN",
-    message = "that address could not be checked right now",
-  ) {
+  constructor(code = "EAI_AGAIN", message = "that address could not be checked right now") {
     super(message);
     this.name = "ResolutionUnavailableError";
     this.code = code;
@@ -65,18 +59,16 @@ export interface GuardOptions {
 }
 
 async function defaultLookup(host: string): Promise<string[]> {
-  const results = await dns.promises.lookup(host, {
-    all: true,
-    verbatim: true,
-  });
+  const results = await dns.promises.lookup(host, { all: true, verbatim: true });
   return results.map((entry) => entry.address);
 }
 
 /**
  * dns.lookup reports a failure by throwing, which left the empty-answer branch
- * below unreachable and sent the raw system error to the Fastify error handler
- * — a 500 "internal error" on the account page for a mistyped address. Two
- * different things hide in that throw and they are not the same story:
+ * in assertPublicSeerrUrl unreachable and sent the raw system error to the
+ * Fastify error handler — a 500 "internal error" on the account page for a
+ * mistyped address. Two different things hide in that throw, and they are not
+ * the same story:
  *
  *   ENOTFOUND / ENODATA — the resolver spoke about the name: no address.
  *                         That is the person's typo.
@@ -100,16 +92,10 @@ function dnsCode(error: unknown): string {
  * and "127.0.0.1" all land on the same representation. Returns undefined for
  * a string that is not an IP literal at all (an ordinary hostname).
  */
-function parseAddress(
-  raw: string,
-):
-  | { family: 4; octets: number[] }
-  | { family: 6; groups: number[] }
-  | undefined {
+function parseAddress(raw: string): { family: 4; octets: number[] } | { family: 6; groups: number[] } | undefined {
   let hostname: string;
   try {
-    const wrapped =
-      raw.includes(":") && !raw.startsWith("[") ? `[${raw}]` : raw;
+    const wrapped = raw.includes(":") && !raw.startsWith("[") ? `[${raw}]` : raw;
     hostname = new URL(`http://${wrapped}/`).hostname;
   } catch {
     return undefined;
@@ -147,15 +133,12 @@ function parseIPv6Groups(addr: string): number[] {
 }
 
 function ipv4ToInt(octets: number[]): number {
-  return (
-    ((octets[0] << 24) | (octets[1] << 16) | (octets[2] << 8) | octets[3]) >>> 0
-  );
+  return ((octets[0] << 24) | (octets[1] << 16) | (octets[2] << 8) | octets[3]) >>> 0;
 }
 
 function inCidr4(value: number, base: string, prefixLength: number): boolean {
   const baseInt = ipv4ToInt(base.split(".").map(Number));
-  const mask =
-    prefixLength === 0 ? 0 : (0xffffffff << (32 - prefixLength)) >>> 0;
+  const mask = prefixLength === 0 ? 0 : (0xffffffff << (32 - prefixLength)) >>> 0;
   return (value & mask) === (baseInt & mask);
 }
 
@@ -194,14 +177,7 @@ export function isBlockedAddress(ip: string): boolean {
   if (parsed.family === 4) return isBlockedIPv4(parsed.octets);
 
   const g = parsed.groups;
-  if (
-    g[0] === 0 &&
-    g[1] === 0 &&
-    g[2] === 0 &&
-    g[3] === 0 &&
-    g[4] === 0 &&
-    (g[5] === 0 || g[5] === 0xffff)
-  ) {
+  if (g[0] === 0 && g[1] === 0 && g[2] === 0 && g[3] === 0 && g[4] === 0 && (g[5] === 0 || g[5] === 0xffff)) {
     // IPv4-mapped (g[5] === 0xffff) or IPv4-compatible (g[5] === 0).
     const embedded = [g[6] >> 8, g[6] & 0xff, g[7] >> 8, g[7] & 0xff];
     return isBlockedIPv4(embedded);
@@ -232,26 +208,16 @@ export async function assertPublicSeerrUrl(
     throw new BlockedAddressError("only https addresses are allowed");
   }
   if (url.username || url.password) {
-    throw new BlockedAddressError(
-      "the address may not carry a username or password",
-    );
+    throw new BlockedAddressError("the address may not carry a username or password");
   }
   if (url.search || url.hash) {
-    throw new BlockedAddressError(
-      "the address may not carry a query string or fragment",
-    );
+    throw new BlockedAddressError("the address may not carry a query string or fragment");
   }
 
-  const literal = parseAddress(
-    url.hostname.startsWith("[") ? url.hostname.slice(1, -1) : url.hostname,
-  );
+  const literal = parseAddress(url.hostname.startsWith("[") ? url.hostname.slice(1, -1) : url.hostname);
   if (literal) {
-    const ip =
-      literal.family === 4
-        ? literal.octets.join(".")
-        : url.hostname.slice(1, -1);
-    if (isBlockedAddress(ip))
-      throw new BlockedAddressError("that address cannot be used");
+    const ip = literal.family === 4 ? literal.octets.join(".") : url.hostname.slice(1, -1);
+    if (isBlockedAddress(ip)) throw new BlockedAddressError("that address cannot be used");
     return { url, addresses: [ip] };
   }
 
@@ -270,8 +236,7 @@ export async function assertPublicSeerrUrl(
     throw new UnresolvableAddressError("ENODATA");
   }
   for (const address of addresses) {
-    if (isBlockedAddress(address))
-      throw new BlockedAddressError("that address cannot be used");
+    if (isBlockedAddress(address)) throw new BlockedAddressError("that address cannot be used");
   }
   return { url, addresses };
 }

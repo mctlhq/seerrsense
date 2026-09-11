@@ -40,12 +40,7 @@ describe("isBlockedAddress", () => {
     expect(isBlockedAddress(address)).toBe(true);
   });
 
-  const allowed = [
-    "93.184.216.34",
-    "8.8.8.8",
-    "2606:2800::1",
-    "2606:2800:220:1:248:1893:25c8:1946",
-  ];
+  const allowed = ["93.184.216.34", "8.8.8.8", "2606:2800::1", "2606:2800:220:1:248:1893:25c8:1946"];
 
   it.each(allowed)("allows the public control %s", (address) => {
     expect(isBlockedAddress(address)).toBe(false);
@@ -57,77 +52,65 @@ describe("isBlockedAddress", () => {
 });
 
 describe("assertPublicSeerrUrl", () => {
-  it("calls a hostname that does not resolve unresolvable, not an internal error", async () => {
-    // dns.lookup throws for a name that is not in the DNS rather than
-    // returning an empty list, so before this the raw system error escaped
-    // assertPublicSeerrUrl and the account page answered 500 "internal error"
-    // for a typo. ENOTFOUND, EAI_AGAIN and ENODATA are the three a caller can
-    // provoke; anything else is a real fault and must keep its stack.
+  it("separates a name that does not resolve from a resolver that did not answer", async () => {
+    // dns.lookup throws for a name outside the DNS rather than returning an
+    // empty list, so before this the raw system error escaped the guard and
+    // the account page answered 500 "internal error" for a typo. ENOTFOUND and
+    // ENODATA are the resolver speaking about the name; EAI_AGAIN is the
+    // resolver not speaking at all, which is our outage and not a typo.
+    const throwing = (code: string) => async () => {
+      throw Object.assign(new Error(`getaddrinfo ${code} media.example.com`), { code });
+    };
     for (const code of ["ENOTFOUND", "ENODATA"]) {
-      const lookup = async () => {
-        throw Object.assign(
-          new Error(`getaddrinfo ${code} media.example.com`),
-          { code },
-        );
-      };
-      await expect(
-        assertPublicSeerrUrl("https://media.example.com", { lookup }),
-      ).rejects.toBeInstanceOf(UnresolvableAddressError);
-      // Still a BlockedAddressError, so every existing "do not dial" caller
-      // keeps refusing it.
-      await expect(
-        assertPublicSeerrUrl("https://media.example.com", { lookup }),
-      ).rejects.toBeInstanceOf(BlockedAddressError);
-    }
-    const empty = async () => [];
-    await expect(
-      assertPublicSeerrUrl("https://media.example.com", { lookup: empty }),
-    ).rejects.toBeInstanceOf(UnresolvableAddressError);
-    // EAI_AGAIN is the resolver failing to answer, not an answer about the
-    // name: nothing has been learned, so it is not reported as a typo.
-    const servfail = async () => {
-      throw Object.assign(
-        new Error("getaddrinfo EAI_AGAIN media.example.com"),
-        { code: "EAI_AGAIN" },
+      const lookup = throwing(code);
+      await expect(assertPublicSeerrUrl("https://media.example.com", { lookup })).rejects.toBeInstanceOf(
+        UnresolvableAddressError,
       );
-    };
-    await expect(
-      assertPublicSeerrUrl("https://media.example.com", { lookup: servfail }),
-    ).rejects.toBeInstanceOf(ResolutionUnavailableError);
-    await expect(
-      assertPublicSeerrUrl("https://media.example.com", { lookup: servfail }),
-    ).rejects.not.toBeInstanceOf(UnresolvableAddressError);
-    await expect(
-      assertPublicSeerrUrl("https://media.example.com", { lookup: servfail }),
-    ).rejects.toBeInstanceOf(BlockedAddressError);
+      // Still a BlockedAddressError, so every dial-time refusal holds.
+      await expect(assertPublicSeerrUrl("https://media.example.com", { lookup })).rejects.toBeInstanceOf(
+        BlockedAddressError,
+      );
+    }
 
-    const broken = async () => {
-      throw new TypeError("lookup is not a function");
-    };
+    const servfail = throwing("EAI_AGAIN");
+    await expect(assertPublicSeerrUrl("https://media.example.com", { lookup: servfail })).rejects.toBeInstanceOf(
+      ResolutionUnavailableError,
+    );
+    await expect(assertPublicSeerrUrl("https://media.example.com", { lookup: servfail })).rejects.not.toBeInstanceOf(
+      UnresolvableAddressError,
+    );
+    await expect(assertPublicSeerrUrl("https://media.example.com", { lookup: servfail })).rejects.toBeInstanceOf(
+      BlockedAddressError,
+    );
+
+    // An answer with nothing in it reads as ENODATA.
     await expect(
-      assertPublicSeerrUrl("https://media.example.com", { lookup: broken }),
+      assertPublicSeerrUrl("https://media.example.com", { lookup: async () => [] }),
+    ).rejects.toBeInstanceOf(UnresolvableAddressError);
+
+    // Anything else a lookup throws is a real fault and keeps its stack.
+    await expect(
+      assertPublicSeerrUrl("https://media.example.com", {
+        lookup: async () => {
+          throw new TypeError("lookup is not a function");
+        },
+      }),
     ).rejects.toBeInstanceOf(TypeError);
   });
 
   it("rejects a scheme other than https", async () => {
-    await expect(
-      assertPublicSeerrUrl("http://media.example.com"),
-    ).rejects.toBeInstanceOf(BlockedAddressError);
+    await expect(assertPublicSeerrUrl("http://media.example.com")).rejects.toBeInstanceOf(BlockedAddressError);
   });
 
   it("rejects userinfo", async () => {
-    await expect(
-      assertPublicSeerrUrl("https://user:pass@media.example.com"),
-    ).rejects.toBeInstanceOf(BlockedAddressError);
+    await expect(assertPublicSeerrUrl("https://user:pass@media.example.com")).rejects.toBeInstanceOf(
+      BlockedAddressError,
+    );
   });
 
   it("rejects a non-empty query or fragment", async () => {
-    await expect(
-      assertPublicSeerrUrl("https://media.example.com?x=1"),
-    ).rejects.toBeInstanceOf(BlockedAddressError);
-    await expect(
-      assertPublicSeerrUrl("https://media.example.com#frag"),
-    ).rejects.toBeInstanceOf(BlockedAddressError);
+    await expect(assertPublicSeerrUrl("https://media.example.com?x=1")).rejects.toBeInstanceOf(BlockedAddressError);
+    await expect(assertPublicSeerrUrl("https://media.example.com#frag")).rejects.toBeInstanceOf(BlockedAddressError);
   });
 
   it("rejects a blocked literal IP without ever calling the resolver", async () => {
@@ -142,17 +125,13 @@ describe("assertPublicSeerrUrl", () => {
       "https://100.64.0.1",
       "https://[fd00::1]",
     ]) {
-      await expect(
-        assertPublicSeerrUrl(url, { lookup }),
-      ).rejects.toBeInstanceOf(BlockedAddressError);
+      await expect(assertPublicSeerrUrl(url, { lookup })).rejects.toBeInstanceOf(BlockedAddressError);
     }
   });
 
   it("resolves a hostname and rejects if any answer is blocked", async () => {
     await expect(
-      assertPublicSeerrUrl("https://media.example.com", {
-        lookup: async () => ["10.0.0.5"],
-      }),
+      assertPublicSeerrUrl("https://media.example.com", { lookup: async () => ["10.0.0.5"] }),
     ).rejects.toBeInstanceOf(BlockedAddressError);
 
     await expect(
@@ -163,20 +142,15 @@ describe("assertPublicSeerrUrl", () => {
   });
 
   it("allows a hostname whose every answer is public", async () => {
-    const { addresses } = await assertPublicSeerrUrl(
-      "https://media.example.com",
-      {
-        lookup: async () => ["93.184.216.34"],
-      },
-    );
+    const { addresses } = await assertPublicSeerrUrl("https://media.example.com", {
+      lookup: async () => ["93.184.216.34"],
+    });
     expect(addresses).toEqual(["93.184.216.34"]);
   });
 
   it("rejects a hostname that resolves to nothing", async () => {
     await expect(
-      assertPublicSeerrUrl("https://media.example.com", {
-        lookup: async () => [],
-      }),
+      assertPublicSeerrUrl("https://media.example.com", { lookup: async () => [] }),
     ).rejects.toBeInstanceOf(BlockedAddressError);
   });
 });
