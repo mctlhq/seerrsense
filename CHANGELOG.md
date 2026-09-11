@@ -1,5 +1,15 @@
 # Changelog
 
+## [1.10.3](https://github.com/mctlhq/seerrsense/compare/1.10.2...1.10.3) (2026-09-11)
+
+
+### Bug Fixes
+
+* **site:** carry the query string across the trailing-slash redirect ([bd9de8d](https://github.com/mctlhq/seerrsense/commit/bd9de8d96ec2b3ef7be99ad5ab4b2fab8697b53e))
+* **site:** sign-in rule in the sign-in step, lighter header, trailing-slash redirects ([e58b0d5](https://github.com/mctlhq/seerrsense/commit/e58b0d5f2d26b3a36bc4863923f6a0f1b6a60263))
+* **site:** sign-in rule in the sign-in step, lighter header, trailing-slash redirects ([f0f2f81](https://github.com/mctlhq/seerrsense/commit/f0f2f81f40237e99478b70938a60b1450713127e))
+* **site:** the four redirects are exact paths, not public subtrees ([827726b](https://github.com/mctlhq/seerrsense/commit/827726b0679c7404f573238789bee2516c6e8380))
+
 ## [1.10.2](https://github.com/mctlhq/seerrsense/compare/1.10.1...1.10.2) (2026-09-10)
 
 
