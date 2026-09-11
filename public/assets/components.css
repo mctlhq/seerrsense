@@ -488,16 +488,14 @@ footer a {
   .hero {
     padding-block-start: 52px;
   }
+  /* Three links and the toggle fit beside the brand down to about 370px;
+     below that the row may wrap rather than push the page sideways. */
   .topbar-links {
-    gap: 12px;
+    gap: 10px;
+    font-size: 13px;
     flex-wrap: wrap;
     justify-content: flex-end;
     row-gap: 6px;
-  }
-  /* Six links plus the toggle do not fit beside the brand on a phone; the
-     repository link is in the footer too, so it is the one to fold. */
-  .topbar-links .link-github {
-    display: none;
   }
   .cta-row .btn {
     flex: 1 1 100%;

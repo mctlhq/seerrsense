@@ -125,7 +125,7 @@ describe("landing page", () => {
     // an HTML 404 that links the real pages; a missing asset 404s inside the
     // assets prefix.
     const browser = { accept: "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8" };
-    for (const path of ["/not-a-page", "/index.html", "/privacy/", "/api/v1/unknown", "/docs"]) {
+    for (const path of ["/not-a-page", "/index.html", "/privacy//", "/api/v1/unknown", "/docs"]) {
       const response = await app.inject({ method: "GET", url: path, headers: browser });
       expect(response.statusCode, path).toBe(404);
       expect(response.headers["content-type"], path).toContain("text/html");
@@ -183,6 +183,32 @@ describe("landing page", () => {
     expect(goodToken.json()).toEqual({ error: "not found" });
   });
 
+  it("redirects a trailing slash on a page to the page, and nowhere else", async () => {
+    for (const page of ["/account", "/privacy", "/terms", "/support"]) {
+      const response = await app.inject({ method: "GET", url: `${page}/` });
+      expect(response.statusCode, page).toBe(301);
+      expect(response.headers.location, page).toBe(page);
+      const withQuery = await app.inject({ method: "GET", url: `${page}/?a=1&b=2` });
+      expect(withQuery.statusCode, page).toBe(301);
+      expect(withQuery.headers.location, page).toBe(`${page}?a=1&b=2`);
+    }
+    // Exactly those four paths, not the subtrees under them. A sibling of the
+    // redirect, asked for without a token and without an HTML Accept (so the
+    // browser 404 exception does not apply), must meet the gate; this is what
+    // fails if the four ever become prefixes in PUBLIC_PREFIXES again.
+    for (const path of ["/account/x", "/privacy/anything", "/terms/2026", "/support/faq", "/account//"]) {
+      const response = await app.inject({ method: "GET", url: path, headers: { accept: "application/json" } });
+      expect(response.statusCode, path).toBe(401);
+      expect(response.headers["www-authenticate"], path).toContain("Bearer");
+    }
+    // The endpoints keep exact matching: a slash there is an undeclared
+    // path and meets the gate like any other.
+    for (const path of ["/mcp/", "/api/v1/"]) {
+      const response = await app.inject({ method: "POST", url: path, payload: {} });
+      expect(response.statusCode, path).toBe(401);
+    }
+  });
+
   it("serves robots.txt without a token and keeps crawlers off the endpoints", async () => {
     const response = await app.inject({ method: "GET", url: "/robots.txt" });
     expect(response.statusCode).toBe(200);
@@ -218,10 +244,19 @@ describe("landing page", () => {
     // say it the same way. Privacy does not state the rule.
     for (const path of ["/", "/account", "/terms", "/support"]) {
       const { payload } = await app.inject({ method: "GET", url: path });
-      expect(payload, path).toMatch(/On this server, any(one with a)? Google\s+account (and|with) a verified\s+e-mail address can sign in/);
-      for (const link of pages) {
-        expect(payload, `${path} links ${link}`).toContain(`href="${link}"`);
+      expect(payload, path).toMatch(/On\s+this server, any(one with a)? Google\s+account (and|with) a verified\s+e-mail address can sign in/);
+      // The header carries Account · Support · GitHub; Privacy and Terms are in
+      // the footer of every page, so every page still reaches every other.
+      const header = payload.slice(payload.indexOf("<header"), payload.indexOf("</header>"));
+      expect(header, path).toContain('href="/account"');
+      expect(header, path).toContain('href="/support"');
+      expect(header, path).not.toContain('href="/privacy"');
+      expect(header, path).not.toContain('href="/terms"');
+      const footer = payload.slice(payload.indexOf("<footer"), payload.indexOf("</footer>"));
+      for (const link of ["/privacy", "/terms", "/support"]) {
+        expect(footer, `${path} footer links ${link}`).toContain(`href="${link}"`);
       }
+      expect(payload, path).toContain('class="brand" href="/"');
     }
     for (const path of ["/privacy", "/terms", "/support"]) {
       const { payload } = await app.inject({ method: "GET", url: path });
@@ -256,6 +291,9 @@ describe("landing page", () => {
     expect(payload).not.toContain("Plugins");
     expect(payload).toContain("Apps &amp; Connectors");
     expect(payload).toContain("claude mcp add --transport http seerrsense");
+    // The sign-in rule belongs to the sign-in step, not to the connector step.
+    const signIn = payload.slice(payload.indexOf("<strong>Sign in with Google.</strong>"), payload.indexOf("<strong>Attach your Seerr.</strong>"));
+    expect(signIn).toContain("verified e-mail address");
     // The REST surface exists but is undocumented; the page must not send a
     // reader to a URL that answers 401.
     expect(payload).not.toContain("/api/v1");
