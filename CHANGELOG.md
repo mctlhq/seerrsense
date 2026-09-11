@@ -1,5 +1,17 @@
 # Changelog
 
+## [1.10.4](https://github.com/mctlhq/seerrsense/compare/1.10.3...1.10.4) (2026-09-11)
+
+
+### Bug Fixes
+
+* **account:** a mistyped Seerr address is a 400 with a hint, not a 500 ([3bde419](https://github.com/mctlhq/seerrsense/commit/3bde419dbd71c37de62269615f872a16468eadf8))
+* **account:** a mistyped Seerr address is a 400 with a hint, not a 500 ([c50d90a](https://github.com/mctlhq/seerrsense/commit/c50d90a18566a5c8b50ce1526e18c63fd9be8589))
+* **account:** a non-string DNS code, and a 503 that does not overclaim ([6e2b4e5](https://github.com/mctlhq/seerrsense/commit/6e2b4e558dfbe8f079d3387729b58347197c0dde))
+* **account:** a resolver outage is a 503, not the person's typo ([99bda30](https://github.com/mctlhq/seerrsense/commit/99bda301d03b627ae3d760bc097ac3a5ecaaae28))
+* **account:** every resolver failure, and one log line that said the opposite ([7dedc21](https://github.com/mctlhq/seerrsense/commit/7dedc21164434da96dae60c42e3cbe289ecc4535))
+* **account:** same 503 on the dial-time resolution, and no whole-file restyle ([834077d](https://github.com/mctlhq/seerrsense/commit/834077df9e71651b665cfd9b5338b651a41386d1))
+
 ## [1.10.3](https://github.com/mctlhq/seerrsense/compare/1.10.2...1.10.3) (2026-09-11)
 
 
