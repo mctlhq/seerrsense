@@ -1,5 +1,11 @@
 import { describe, it, expect } from "vitest";
-import { assertPublicSeerrUrl, BlockedAddressError, isBlockedAddress } from "../src/providers/seerr/guard.js";
+import {
+  assertPublicSeerrUrl,
+  BlockedAddressError,
+  isBlockedAddress,
+  ResolutionUnavailableError,
+  UnresolvableAddressError,
+} from "../src/providers/seerr/guard.js";
 
 describe("isBlockedAddress", () => {
   const blocked = [
@@ -46,6 +52,71 @@ describe("isBlockedAddress", () => {
 });
 
 describe("assertPublicSeerrUrl", () => {
+  it("separates a name that does not resolve from a resolver that did not answer", async () => {
+    // dns.lookup throws for a name outside the DNS rather than returning an
+    // empty list, so before this the raw system error escaped the guard and
+    // the account page answered 500 "internal error" for a typo. ENOTFOUND and
+    // ENODATA are the resolver speaking about the name; EAI_AGAIN is the
+    // resolver not speaking at all, which is our outage and not a typo.
+    const throwing = (code: string) => async () => {
+      throw Object.assign(new Error(`getaddrinfo ${code} media.example.com`), { code });
+    };
+    for (const code of ["ENOTFOUND", "ENODATA"]) {
+      const lookup = throwing(code);
+      await expect(assertPublicSeerrUrl("https://media.example.com", { lookup })).rejects.toBeInstanceOf(
+        UnresolvableAddressError,
+      );
+      // Still a BlockedAddressError, so every dial-time refusal holds.
+      await expect(assertPublicSeerrUrl("https://media.example.com", { lookup })).rejects.toBeInstanceOf(
+        BlockedAddressError,
+      );
+    }
+
+    // Every getaddrinfo failure node does not fold into ENOTFOUND arrives with
+    // an EAI_ code, so the prefix is the test, not a list that the next code
+    // would fall off.
+    for (const code of ["EAI_AGAIN", "EAI_FAIL", "EAI_SYSTEM", "EAI_MEMORY"]) {
+      await expect(
+        assertPublicSeerrUrl("https://media.example.com", { lookup: throwing(code) }),
+      ).rejects.toBeInstanceOf(ResolutionUnavailableError);
+    }
+
+    const servfail = throwing("EAI_AGAIN");
+    await expect(assertPublicSeerrUrl("https://media.example.com", { lookup: servfail })).rejects.toBeInstanceOf(
+      ResolutionUnavailableError,
+    );
+    await expect(assertPublicSeerrUrl("https://media.example.com", { lookup: servfail })).rejects.not.toBeInstanceOf(
+      UnresolvableAddressError,
+    );
+    await expect(assertPublicSeerrUrl("https://media.example.com", { lookup: servfail })).rejects.toBeInstanceOf(
+      BlockedAddressError,
+    );
+
+    // An answer with nothing in it reads as ENODATA.
+    await expect(
+      assertPublicSeerrUrl("https://media.example.com", { lookup: async () => [] }),
+    ).rejects.toBeInstanceOf(UnresolvableAddressError);
+
+    // A non-string code must not reach the prefix test: that would throw
+    // inside the catch and produce a different 500 than the one removed here.
+    await expect(
+      assertPublicSeerrUrl("https://media.example.com", {
+        lookup: async () => {
+          throw Object.assign(new Error("odd"), { code: -3008 });
+        },
+      }),
+    ).rejects.toThrow("odd");
+
+    // Anything else a lookup throws is a real fault and keeps its stack.
+    await expect(
+      assertPublicSeerrUrl("https://media.example.com", {
+        lookup: async () => {
+          throw new TypeError("lookup is not a function");
+        },
+      }),
+    ).rejects.toBeInstanceOf(TypeError);
+  });
+
   it("rejects a scheme other than https", async () => {
     await expect(assertPublicSeerrUrl("http://media.example.com")).rejects.toBeInstanceOf(BlockedAddressError);
   });

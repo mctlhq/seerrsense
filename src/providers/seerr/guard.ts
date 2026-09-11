@@ -18,6 +18,41 @@ export class BlockedAddressError extends Error {
   }
 }
 
+/**
+ * The resolver answered about the name, and the answer was "no address".
+ *
+ * A subclass rather than a sibling: every existing `instanceof
+ * BlockedAddressError` site already treats this as "do not dial that address"
+ * and keeps doing so. The account page is the one caller that separates the
+ * two, because "check it for a typo" and "that address is not allowed" send a
+ * person to different places.
+ */
+export class UnresolvableAddressError extends BlockedAddressError {
+  readonly code: string;
+  constructor(code = "ENOTFOUND", message = "that address could not be resolved") {
+    super(message);
+    this.name = "UnresolvableAddressError";
+    this.code = code;
+  }
+}
+
+/**
+ * The resolver did not answer at all — an upstream SERVFAIL, or, far more
+ * often in a container, the cluster DNS saturated or down. Nothing has been
+ * learned about the name, so this is not the person's typo and must not be
+ * reported as one: the account page answers 503 and invites a retry. Still a
+ * BlockedAddressError, because an address that could not be checked is an
+ * address that must not be dialled.
+ */
+export class ResolutionUnavailableError extends BlockedAddressError {
+  readonly code: string;
+  constructor(code = "EAI_AGAIN", message = "that address could not be checked right now") {
+    super(message);
+    this.name = "ResolutionUnavailableError";
+    this.code = code;
+  }
+}
+
 export interface GuardOptions {
   /** Injectable for tests. Defaults to a real DNS lookup of every address. */
   lookup?: (host: string) => Promise<string[]>;
@@ -26,6 +61,47 @@ export interface GuardOptions {
 async function defaultLookup(host: string): Promise<string[]> {
   const results = await dns.promises.lookup(host, { all: true, verbatim: true });
   return results.map((entry) => entry.address);
+}
+
+/**
+ * dns.lookup reports a failure by throwing, which left the empty-answer branch
+ * in assertPublicSeerrUrl unreachable and sent the raw system error to the
+ * Fastify error handler — a 500 "internal error" on the account page for a
+ * mistyped address. Two different things hide in that throw, and they are not
+ * the same story:
+ *
+ *   ENOTFOUND / ENODATA — the resolver spoke about the name: no address.
+ *                         That is the person's typo.
+ *   every other EAI_*   — the name was never checked: EAI_AGAIN for a
+ *                         temporary resolver failure, EAI_FAIL for a
+ *                         permanent one, EAI_SYSTEM and EAI_MEMORY for the
+ *                         lookup itself falling over inside this pod (a
+ *                         classic EAI_SYSTEM is EMFILE, out of descriptors).
+ *                         All of them are ours, not theirs, and blaming a
+ *                         correct address for any of them would send someone
+ *                         hunting a typo that is not there. What they are not
+ *                         is one story, so the answer says "could not check",
+ *                         and the code goes to the log for whoever is paged.
+ *
+ * The EAI_ prefix rather than a list: node fabricates these in dnsException,
+ * folding UV_EAI_NONAME and UV_EAI_NODATA into ENOTFOUND and passing every
+ * other status through getSystemErrorName, so the set is whatever that
+ * returns and a named list would leave the next one on the 500 path.
+ * Anything without such a code is a real fault and keeps its stack.
+ */
+const NAME_MISS = new Set(["ENOTFOUND", "ENODATA"]);
+
+function dnsCode(error: unknown): string {
+  // A runtime check, not a cast: `code` is whatever the thrower put there, and
+  // a number (an errno, say) would make the prefix test below throw inside the
+  // catch — turning a DNS failure into a different 500 than the one this
+  // change exists to remove.
+  const code = (error as { code?: unknown } | undefined)?.code;
+  return typeof code === "string" ? code : "";
+}
+
+function isResolverFailure(code: string): boolean {
+  return code.startsWith("EAI_");
 }
 
 /**
@@ -165,9 +241,18 @@ export async function assertPublicSeerrUrl(
   }
 
   const lookup = opts.lookup ?? defaultLookup;
-  const addresses = await lookup(url.hostname);
+  let addresses: string[];
+  try {
+    addresses = await lookup(url.hostname);
+  } catch (error) {
+    const code = dnsCode(error);
+    if (NAME_MISS.has(code)) throw new UnresolvableAddressError(code);
+    if (isResolverFailure(code)) throw new ResolutionUnavailableError(code);
+    throw error;
+  }
   if (addresses.length === 0) {
-    throw new BlockedAddressError("that address could not be resolved");
+    // An answer with no addresses in it: the same story as ENODATA.
+    throw new UnresolvableAddressError("ENODATA");
   }
   for (const address of addresses) {
     if (isBlockedAddress(address)) throw new BlockedAddressError("that address cannot be used");

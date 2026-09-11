@@ -488,6 +488,85 @@ describe("attaching a Seerr", () => {
     await app.close();
   });
 
+  it("answers 400 with a typo hint when the address does not resolve", async () => {
+    // Regression: dns.lookup throws for a name outside the DNS instead of
+    // returning nothing, the raw system error escaped the guard, and the
+    // account page showed "internal error" — a 500 — for a mistyped address.
+    // Seen in the browser against production on 2026-09-11.
+    const enotfound = async () => {
+      throw Object.assign(new Error("getaddrinfo ENOTFOUND typo.example"), { code: "ENOTFOUND" });
+    };
+    const app = buildServer({ fetchImpl: stubFetch as unknown as typeof fetch, lookup: enotfound });
+    await app.ready();
+    const cookie = await signIn(app);
+    seerrCalls = [];
+
+    const response = await app.inject({
+      method: "PUT",
+      url: "/api/v1/account/connection",
+      headers: { cookie },
+      payload: { seerrUrl: "https://typo.example", apiKey: "my-key" },
+    });
+    expect(response.statusCode).toBe(400);
+    expect(response.json().error).toMatch(/did not resolve/);
+    expect(response.json().error).not.toMatch(/internal/);
+    // And it said so without dialling anything.
+    expect(seerrCalls).toEqual([]);
+    await app.close();
+  });
+
+  it("answers 503, not a typo hint, when the resolver itself is down", async () => {
+    // EAI_AGAIN is cluster DNS wobbling. Telling the person their address is
+    // wrong would send them hunting a typo that is not there, and a 400 would
+    // tell a client never to retry.
+    const servfail = async () => {
+      throw Object.assign(new Error("getaddrinfo EAI_AGAIN mine.example"), { code: "EAI_AGAIN" });
+    };
+    const app = buildServer({ fetchImpl: stubFetch as unknown as typeof fetch, lookup: servfail });
+    await app.ready();
+    const cookie = await signIn(app);
+    seerrCalls = [];
+
+    const response = await app.inject({
+      method: "PUT",
+      url: "/api/v1/account/connection",
+      headers: { cookie },
+      payload: { seerrUrl: "https://mine.example", apiKey: "my-key" },
+    });
+    expect(response.statusCode).toBe(503);
+    expect(response.headers["retry-after"]).toBe("30");
+    expect(response.json().error).toMatch(/Could not check that address/);
+    expect(response.json().error).not.toMatch(/typo/);
+    expect(seerrCalls).toEqual([]);
+    await app.close();
+  });
+
+  it("answers 503 when the resolver goes down between the check and the dial", async () => {
+    // describeSelf re-runs the guard with a cold memo, so a PUT resolves the
+    // hostname twice. The resolver can answer the first and not the second;
+    // that second failure must not come back as "check the address".
+    let call = 0;
+    const flaky = async () => {
+      call += 1;
+      if (call === 1) return ["93.184.216.34"];
+      throw Object.assign(new Error("getaddrinfo EAI_AGAIN mine.example"), { code: "EAI_AGAIN" });
+    };
+    const app = buildServer({ fetchImpl: stubFetch as unknown as typeof fetch, lookup: flaky });
+    await app.ready();
+    const cookie = await signIn(app);
+
+    const response = await app.inject({
+      method: "PUT",
+      url: "/api/v1/account/connection",
+      headers: { cookie },
+      payload: { seerrUrl: "https://mine.example", apiKey: "my-key" },
+    });
+    expect(call).toBeGreaterThan(1);
+    expect(response.statusCode).toBe(503);
+    expect(response.json().error).toMatch(/Could not check that address/);
+    await app.close();
+  });
+
   it("names Cloudflare Access rather than the generic failure", async () => {
     const app = await makeApp();
     const cookie = await signIn(app);

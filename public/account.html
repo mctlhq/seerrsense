@@ -71,7 +71,7 @@
 
 <main class="page">
   <p class="eyebrow">Your account</p>
-  <h1>Sign in to connect your Seerr</h1>
+  <h1 id="page-title" data-signed-out="Sign in to connect your Seerr" data-signed-in="Your Seerr">Sign in to connect your Seerr</h1>
 
   <div id="signed-out">
     <p class="lead">Sign in with Google first. You then enter the address and API key of your own
@@ -141,6 +141,31 @@
   var form = document.getElementById("connection");
   var disconnect = document.getElementById("disconnect");
   var signOut = document.getElementById("sign-out");
+  var title = document.getElementById("page-title");
+
+  // The heading names the state the page is in. Signed in, "Sign in to
+  // connect your Seerr" is an instruction the person has already followed.
+  function setTitle(state) {
+    title.textContent = title.dataset[state === "in" ? "signedIn" : "signedOut"];
+  }
+
+  // Typing media.example.com is what people do; the field is type=url, so the
+  // browser refuses it with "Please enter a URL" and the person is left to
+  // guess that a scheme is missing. https is the only scheme the server
+  // accepts, so filling it in is not a guess.
+  var urlField = document.getElementById("seerr-url");
+  function fillInScheme() {
+    var value = urlField.value.trim();
+    if (value && !value.includes("://")) urlField.value = "https://" + value;
+  }
+  // Both ways out of the field. Enter is the commonest — it submits without
+  // ever blurring, and constraint validation would run on the unprefixed
+  // value and show the same bubble; keydown fires before that. A submit
+  // listener would be too late for the same reason.
+  urlField.addEventListener("blur", fillInScheme);
+  urlField.addEventListener("keydown", function (event) {
+    if (event.key === "Enter") fillInScheme();
+  });
 
   function show(message, kind) {
     status.textContent = message;
@@ -191,6 +216,7 @@
   function showSignedOut(message) {
     signedOut.hidden = false;
     signedIn.hidden = true;
+    setTitle("out");
     if (message) {
       document.getElementById("sign-in-note").textContent = message;
       document.getElementById("sign-in").hidden = true;
@@ -214,6 +240,7 @@
     signedInEmail = body.email;
     signedOut.hidden = true;
     signedIn.hidden = false;
+    setTitle("in");
     renderStatus(body);
     if (body.connected) {
       document.getElementById("seerr-url").value = body.seerrUrl;

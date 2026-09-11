@@ -5,7 +5,12 @@ import { open, seal } from "../auth/crypto.js";
 import { readSession, SESSION_COOKIE, SESSION_TTL_SECONDS, type Session } from "../auth/session.js";
 import type { AuthStore } from "../auth/store.js";
 import { SeerrAccessChallengeError, SeerrClient, SeerrUnreachableError } from "../providers/seerr/client.js";
-import { assertPublicSeerrUrl, BlockedAddressError } from "../providers/seerr/guard.js";
+import {
+  assertPublicSeerrUrl,
+  BlockedAddressError,
+  ResolutionUnavailableError,
+  UnresolvableAddressError,
+} from "../providers/seerr/guard.js";
 import type { TenantResolver } from "../providers/seerr/tenants.js";
 import { describeError } from "../core/errors.js";
 
@@ -123,6 +128,23 @@ export function registerAccountRoutes(
     try {
       await assertPublicSeerrUrl(body.data.seerrUrl, { lookup: deps.lookup });
     } catch (error) {
+      // The DNS code, not the error's message: that message is a constant
+      // here, and the code is the only part an operator cannot infer from the
+      // log line itself.
+      if (error instanceof UnresolvableAddressError) {
+        request.log.info({ dns: error.code }, "rejected a Seerr connection address that does not resolve");
+        return reply.status(400).send({
+          error: "That address did not resolve. Check it for a typo, and that it is the address you open Seerr at.",
+        });
+      }
+      // Our resolver, not their address: say so, and do not send anyone
+      // hunting a typo that is not there.
+      if (error instanceof ResolutionUnavailableError) {
+        request.log.warn({ dns: error.code }, "could not resolve a Seerr connection address");
+        return reply.status(503).header("retry-after", "30").send({
+          error: "Could not check that address just now. This is on us, not on your address — try again in a moment.",
+        });
+      }
       if (error instanceof BlockedAddressError) {
         // The address itself is the person's own infrastructure and stays out
         // of the log; that it was blocked, and why, is all an operator needs.
@@ -150,6 +172,18 @@ export function registerAccountRoutes(
       seerrUser = await candidate.describeSelf();
     } catch (error) {
       void candidate.close();
+      // describeSelf re-runs the guard with a cold memo, so a second, quite
+      // independent resolution happens here and the resolver can be down for
+      // this one having answered the first. Same story, same 503: a correct
+      // address must not be reported as wrong because our DNS blinked. It
+      // returns above the log line below because "rejected a Seerr connection
+      // that did not answer" is not what happened — nobody was asked.
+      if (error instanceof ResolutionUnavailableError) {
+        request.log.warn({ dns: error.code }, "could not resolve a Seerr connection address");
+        return reply.status(503).header("retry-after", "30").send({
+          error: "Could not check that address just now. This is on us, not on your address — try again in a moment.",
+        });
+      }
       request.log.info({ err: describeError(error) }, "rejected a Seerr connection that did not answer");
       if (error instanceof SeerrAccessChallengeError) {
         return reply.status(400).send({
