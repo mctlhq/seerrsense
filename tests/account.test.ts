@@ -488,6 +488,33 @@ describe("attaching a Seerr", () => {
     await app.close();
   });
 
+  it("answers 400 with a typo hint when the address does not resolve", async () => {
+    // Regression: dns.lookup throws for a name outside the DNS instead of
+    // returning nothing, the raw system error escaped the guard, and the
+    // account page showed "internal error" — a 500 — for a mistyped address.
+    // Seen in the browser against production on 2026-09-11.
+    const enotfound = async () => {
+      throw Object.assign(new Error("getaddrinfo ENOTFOUND typo.example"), { code: "ENOTFOUND" });
+    };
+    const app = buildServer({ fetchImpl: stubFetch as unknown as typeof fetch, lookup: enotfound });
+    await app.ready();
+    const cookie = await signIn(app);
+    seerrCalls = [];
+
+    const response = await app.inject({
+      method: "PUT",
+      url: "/api/v1/account/connection",
+      headers: { cookie },
+      payload: { seerrUrl: "https://typo.example", apiKey: "my-key" },
+    });
+    expect(response.statusCode).toBe(400);
+    expect(response.json().error).toMatch(/did not resolve/);
+    expect(response.json().error).not.toMatch(/internal/);
+    // And it said so without dialling anything.
+    expect(seerrCalls).toEqual([]);
+    await app.close();
+  });
+
   it("names Cloudflare Access rather than the generic failure", async () => {
     const app = await makeApp();
     const cookie = await signIn(app);

@@ -18,6 +18,20 @@ export class BlockedAddressError extends Error {
   }
 }
 
+/**
+ * A subclass rather than a sibling: every existing `instanceof
+ * BlockedAddressError` site already treats this as "do not dial that address"
+ * and keeps doing so. The account page is the one caller that separates the
+ * two, because "check it for a typo" and "that address is not allowed" send
+ * a person to different places.
+ */
+export class UnresolvableAddressError extends BlockedAddressError {
+  constructor(message = "that address could not be resolved") {
+    super(message);
+    this.name = "UnresolvableAddressError";
+  }
+}
+
 export interface GuardOptions {
   /** Injectable for tests. Defaults to a real DNS lookup of every address. */
   lookup?: (host: string) => Promise<string[]>;
@@ -26,6 +40,22 @@ export interface GuardOptions {
 async function defaultLookup(host: string): Promise<string[]> {
   const results = await dns.promises.lookup(host, { all: true, verbatim: true });
   return results.map((entry) => entry.address);
+}
+
+/**
+ * A hostname that does not resolve is a typo, not a fault of this server.
+ * dns.lookup signals that by throwing (ENOTFOUND for a name that is not in
+ * the DNS, EAI_AGAIN when the resolver itself could not answer, ENODATA for a
+ * name with no address record), which left the empty-array branch below
+ * unreachable and sent the raw system error to the Fastify error handler — a
+ * 500 "internal error" on the account page for a mistyped address. Only these
+ * three are translated; anything else from a lookup is a real fault and keeps
+ * its stack.
+ */
+const DNS_MISS = new Set(["ENOTFOUND", "EAI_AGAIN", "ENODATA"]);
+
+function isDnsMiss(error: unknown): boolean {
+  return DNS_MISS.has((error as { code?: string } | undefined)?.code ?? "");
 }
 
 /**
@@ -165,9 +195,15 @@ export async function assertPublicSeerrUrl(
   }
 
   const lookup = opts.lookup ?? defaultLookup;
-  const addresses = await lookup(url.hostname);
+  let addresses: string[];
+  try {
+    addresses = await lookup(url.hostname);
+  } catch (error) {
+    if (isDnsMiss(error)) throw new UnresolvableAddressError();
+    throw error;
+  }
   if (addresses.length === 0) {
-    throw new BlockedAddressError("that address could not be resolved");
+    throw new UnresolvableAddressError();
   }
   for (const address of addresses) {
     if (isBlockedAddress(address)) throw new BlockedAddressError("that address cannot be used");

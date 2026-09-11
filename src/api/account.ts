@@ -5,7 +5,7 @@ import { open, seal } from "../auth/crypto.js";
 import { readSession, SESSION_COOKIE, SESSION_TTL_SECONDS, type Session } from "../auth/session.js";
 import type { AuthStore } from "../auth/store.js";
 import { SeerrAccessChallengeError, SeerrClient, SeerrUnreachableError } from "../providers/seerr/client.js";
-import { assertPublicSeerrUrl, BlockedAddressError } from "../providers/seerr/guard.js";
+import { assertPublicSeerrUrl, BlockedAddressError, UnresolvableAddressError } from "../providers/seerr/guard.js";
 import type { TenantResolver } from "../providers/seerr/tenants.js";
 import { describeError } from "../core/errors.js";
 
@@ -123,6 +123,12 @@ export function registerAccountRoutes(
     try {
       await assertPublicSeerrUrl(body.data.seerrUrl, { lookup: deps.lookup });
     } catch (error) {
+      if (error instanceof UnresolvableAddressError) {
+        request.log.info({ reason: error.message }, "rejected a Seerr connection address");
+        return reply.status(400).send({
+          error: "That address did not resolve. Check it for a typo, and that it is the address you open Seerr at.",
+        });
+      }
       if (error instanceof BlockedAddressError) {
         // The address itself is the person's own infrastructure and stays out
         // of the log; that it was blocked, and why, is all an operator needs.
