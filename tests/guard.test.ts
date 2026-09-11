@@ -72,6 +72,15 @@ describe("assertPublicSeerrUrl", () => {
       );
     }
 
+    // Every getaddrinfo failure node does not fold into ENOTFOUND arrives with
+    // an EAI_ code, so the prefix is the test, not a list that the next code
+    // would fall off.
+    for (const code of ["EAI_AGAIN", "EAI_FAIL", "EAI_SYSTEM"]) {
+      await expect(
+        assertPublicSeerrUrl("https://media.example.com", { lookup: throwing(code) }),
+      ).rejects.toBeInstanceOf(ResolutionUnavailableError);
+    }
+
     const servfail = throwing("EAI_AGAIN");
     await expect(assertPublicSeerrUrl("https://media.example.com", { lookup: servfail })).rejects.toBeInstanceOf(
       ResolutionUnavailableError,

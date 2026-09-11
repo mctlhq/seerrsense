@@ -72,17 +72,27 @@ async function defaultLookup(host: string): Promise<string[]> {
  *
  *   ENOTFOUND / ENODATA — the resolver spoke about the name: no address.
  *                         That is the person's typo.
- *   EAI_AGAIN           — the resolver did not speak. That is our outage, and
- *                         blaming a correct address for it would send someone
- *                         hunting a typo that is not there.
+ *   every other EAI_*   — the resolver did not speak: EAI_AGAIN for a
+ *                         temporary failure, EAI_FAIL for a permanent one,
+ *                         EAI_SYSTEM and friends for the lookup itself
+ *                         falling over. That is our outage, and blaming a
+ *                         correct address for it would send someone hunting a
+ *                         typo that is not there.
  *
- * Anything else a lookup throws is a real fault and keeps its stack.
+ * The EAI_ prefix rather than a list: node fabricates these in dnsException,
+ * folding UV_EAI_NONAME and UV_EAI_NODATA into ENOTFOUND and passing every
+ * other status through getSystemErrorName, so the set is whatever that
+ * returns and a named list would leave the next one on the 500 path.
+ * Anything without such a code is a real fault and keeps its stack.
  */
 const NAME_MISS = new Set(["ENOTFOUND", "ENODATA"]);
-const RESOLVER_DOWN = new Set(["EAI_AGAIN"]);
 
 function dnsCode(error: unknown): string {
   return (error as { code?: string } | undefined)?.code ?? "";
+}
+
+function isResolverFailure(code: string): boolean {
+  return code.startsWith("EAI_");
 }
 
 /**
@@ -228,7 +238,7 @@ export async function assertPublicSeerrUrl(
   } catch (error) {
     const code = dnsCode(error);
     if (NAME_MISS.has(code)) throw new UnresolvableAddressError(code);
-    if (RESOLVER_DOWN.has(code)) throw new ResolutionUnavailableError(code);
+    if (isResolverFailure(code)) throw new ResolutionUnavailableError(code);
     throw error;
   }
   if (addresses.length === 0) {

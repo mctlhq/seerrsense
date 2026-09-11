@@ -172,22 +172,24 @@ export function registerAccountRoutes(
       seerrUser = await candidate.describeSelf();
     } catch (error) {
       void candidate.close();
+      // describeSelf re-runs the guard with a cold memo, so a second, quite
+      // independent resolution happens here and the resolver can be down for
+      // this one having answered the first. Same story, same 503: a correct
+      // address must not be reported as wrong because our DNS blinked. It
+      // returns above the log line below because "rejected a Seerr connection
+      // that did not answer" is not what happened — nobody was asked.
+      if (error instanceof ResolutionUnavailableError) {
+        request.log.warn({ dns: error.code }, "could not resolve a Seerr connection address");
+        return reply.status(503).header("retry-after", "30").send({
+          error: "Could not check that address just now — the name server did not answer. Try again in a moment.",
+        });
+      }
       request.log.info({ err: describeError(error) }, "rejected a Seerr connection that did not answer");
       if (error instanceof SeerrAccessChallengeError) {
         return reply.status(400).send({
           error:
             "That address is behind Cloudflare Access — fill in the Zero Trust fields " +
             "(CF-Access-Client-Id and CF-Access-Client-Secret).",
-        });
-      }
-      // describeSelf re-runs the guard with a cold memo, so a second, quite
-      // independent resolution happens here and the resolver can be down for
-      // this one having answered the first. Same story, same 503: a correct
-      // address must not be reported as wrong because our DNS blinked.
-      if (error instanceof ResolutionUnavailableError) {
-        request.log.warn({ dns: error.code }, "could not resolve a Seerr connection address");
-        return reply.status(503).header("retry-after", "30").send({
-          error: "Could not check that address just now — the name server did not answer. Try again in a moment.",
         });
       }
       if (error instanceof SeerrUnreachableError || error instanceof BlockedAddressError) {
