@@ -72,12 +72,16 @@ async function defaultLookup(host: string): Promise<string[]> {
  *
  *   ENOTFOUND / ENODATA — the resolver spoke about the name: no address.
  *                         That is the person's typo.
- *   every other EAI_*   — the resolver did not speak: EAI_AGAIN for a
- *                         temporary failure, EAI_FAIL for a permanent one,
- *                         EAI_SYSTEM and friends for the lookup itself
- *                         falling over. That is our outage, and blaming a
- *                         correct address for it would send someone hunting a
- *                         typo that is not there.
+ *   every other EAI_*   — the name was never checked: EAI_AGAIN for a
+ *                         temporary resolver failure, EAI_FAIL for a
+ *                         permanent one, EAI_SYSTEM and EAI_MEMORY for the
+ *                         lookup itself falling over inside this pod (a
+ *                         classic EAI_SYSTEM is EMFILE, out of descriptors).
+ *                         All of them are ours, not theirs, and blaming a
+ *                         correct address for any of them would send someone
+ *                         hunting a typo that is not there. What they are not
+ *                         is one story, so the answer says "could not check",
+ *                         and the code goes to the log for whoever is paged.
  *
  * The EAI_ prefix rather than a list: node fabricates these in dnsException,
  * folding UV_EAI_NONAME and UV_EAI_NODATA into ENOTFOUND and passing every
@@ -88,7 +92,12 @@ async function defaultLookup(host: string): Promise<string[]> {
 const NAME_MISS = new Set(["ENOTFOUND", "ENODATA"]);
 
 function dnsCode(error: unknown): string {
-  return (error as { code?: string } | undefined)?.code ?? "";
+  // A runtime check, not a cast: `code` is whatever the thrower put there, and
+  // a number (an errno, say) would make the prefix test below throw inside the
+  // catch — turning a DNS failure into a different 500 than the one this
+  // change exists to remove.
+  const code = (error as { code?: unknown } | undefined)?.code;
+  return typeof code === "string" ? code : "";
 }
 
 function isResolverFailure(code: string): boolean {

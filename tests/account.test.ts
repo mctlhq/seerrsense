@@ -535,7 +535,7 @@ describe("attaching a Seerr", () => {
     });
     expect(response.statusCode).toBe(503);
     expect(response.headers["retry-after"]).toBe("30");
-    expect(response.json().error).toMatch(/name server did not answer/);
+    expect(response.json().error).toMatch(/Could not check that address/);
     expect(response.json().error).not.toMatch(/typo/);
     expect(seerrCalls).toEqual([]);
     await app.close();
@@ -563,7 +563,7 @@ describe("attaching a Seerr", () => {
     });
     expect(call).toBeGreaterThan(1);
     expect(response.statusCode).toBe(503);
-    expect(response.json().error).toMatch(/name server did not answer/);
+    expect(response.json().error).toMatch(/Could not check that address/);
     await app.close();
   });
 

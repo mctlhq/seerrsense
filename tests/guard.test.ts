@@ -75,7 +75,7 @@ describe("assertPublicSeerrUrl", () => {
     // Every getaddrinfo failure node does not fold into ENOTFOUND arrives with
     // an EAI_ code, so the prefix is the test, not a list that the next code
     // would fall off.
-    for (const code of ["EAI_AGAIN", "EAI_FAIL", "EAI_SYSTEM"]) {
+    for (const code of ["EAI_AGAIN", "EAI_FAIL", "EAI_SYSTEM", "EAI_MEMORY"]) {
       await expect(
         assertPublicSeerrUrl("https://media.example.com", { lookup: throwing(code) }),
       ).rejects.toBeInstanceOf(ResolutionUnavailableError);
@@ -96,6 +96,16 @@ describe("assertPublicSeerrUrl", () => {
     await expect(
       assertPublicSeerrUrl("https://media.example.com", { lookup: async () => [] }),
     ).rejects.toBeInstanceOf(UnresolvableAddressError);
+
+    // A non-string code must not reach the prefix test: that would throw
+    // inside the catch and produce a different 500 than the one removed here.
+    await expect(
+      assertPublicSeerrUrl("https://media.example.com", {
+        lookup: async () => {
+          throw Object.assign(new Error("odd"), { code: -3008 });
+        },
+      }),
+    ).rejects.toThrow("odd");
 
     // Anything else a lookup throws is a real fault and keeps its stack.
     await expect(

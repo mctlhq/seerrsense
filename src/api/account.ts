@@ -142,7 +142,7 @@ export function registerAccountRoutes(
       if (error instanceof ResolutionUnavailableError) {
         request.log.warn({ dns: error.code }, "could not resolve a Seerr connection address");
         return reply.status(503).header("retry-after", "30").send({
-          error: "Could not check that address just now — the name server did not answer. Try again in a moment.",
+          error: "Could not check that address just now. This is on us, not on your address — try again in a moment.",
         });
       }
       if (error instanceof BlockedAddressError) {
@@ -181,7 +181,7 @@ export function registerAccountRoutes(
       if (error instanceof ResolutionUnavailableError) {
         request.log.warn({ dns: error.code }, "could not resolve a Seerr connection address");
         return reply.status(503).header("retry-after", "30").send({
-          error: "Could not check that address just now — the name server did not answer. Try again in a moment.",
+          error: "Could not check that address just now. This is on us, not on your address — try again in a moment.",
         });
       }
       request.log.info({ err: describeError(error) }, "rejected a Seerr connection that did not answer");
