@@ -237,14 +237,6 @@ describe("landing page", () => {
       const boot = head.indexOf('localStorage.getItem("seerrsense-theme")');
       expect(boot, path).toBeGreaterThan(-1);
       expect(boot, path).toBeLessThan(head.indexOf("<link rel=\"stylesheet\""));
-    }
-    // Wherever the sign-in rule is stated it is stated whole: Google's
-    // email_verified is refused outright (src/auth/google.ts), so "verified"
-    // is a condition, not a detail, and every page that states the rule must
-    // say it the same way. Privacy does not state the rule.
-    for (const path of ["/", "/account", "/terms", "/support"]) {
-      const { payload } = await app.inject({ method: "GET", url: path });
-      expect(payload, path).toMatch(/On\s+this server, any(one with a)? Google\s+account (and|with) a verified\s+e-mail address can sign in/);
       // The header carries Account · Support · GitHub; Privacy and Terms are in
       // the footer of every page, so every page still reaches every other.
       const header = payload.slice(payload.indexOf("<header"), payload.indexOf("</header>"));
@@ -257,6 +249,15 @@ describe("landing page", () => {
         expect(footer, `${path} footer links ${link}`).toContain(`href="${link}"`);
       }
       expect(payload, path).toContain('class="brand" href="/"');
+    }
+    // Wherever the sign-in rule is stated it is stated whole: Google's
+    // email_verified is refused outright (src/auth/google.ts), so "verified"
+    // is a condition, not a detail, and every page that states the rule must
+    // say it the same way. Privacy deliberately does not state the rule, which
+    // is why this loop is four pages and the shared-shell loop above is five.
+    for (const path of ["/", "/account", "/terms", "/support"]) {
+      const { payload } = await app.inject({ method: "GET", url: path });
+      expect(payload, path).toMatch(/On\s+this server, any(one with a)? Google\s+account (and|with) a verified\s+e-mail address can sign in/);
     }
     for (const path of ["/privacy", "/terms", "/support"]) {
       const { payload } = await app.inject({ method: "GET", url: path });
