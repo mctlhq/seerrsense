@@ -532,8 +532,8 @@ export function buildServer(
       // Carry the query across. Nothing under these four reads its own query
       // today, but a redirect that quietly drops it is the kind of thing a
       // later ?utm= or ?error= discovers the hard way.
-      const query = request.url.slice(request.url.indexOf("?"));
-      return reply.redirect(request.url.includes("?") ? page + query : page, 301);
+      const queryAt = request.url.indexOf("?");
+      return reply.redirect(queryAt === -1 ? page : page + request.url.slice(queryAt), 301);
     });
   }
   // What a browser gets at an address that is not a page (see the auth gate
