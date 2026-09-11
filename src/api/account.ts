@@ -2,10 +2,24 @@ import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 import { z } from "zod";
 import type { OAuthConfig } from "../auth/config.js";
 import { open, seal } from "../auth/crypto.js";
-import { readSession, SESSION_COOKIE, SESSION_TTL_SECONDS, type Session } from "../auth/session.js";
+import {
+  readSession,
+  SESSION_COOKIE,
+  SESSION_TTL_SECONDS,
+  type Session,
+} from "../auth/session.js";
 import type { AuthStore } from "../auth/store.js";
-import { SeerrAccessChallengeError, SeerrClient, SeerrUnreachableError } from "../providers/seerr/client.js";
-import { assertPublicSeerrUrl, BlockedAddressError, UnresolvableAddressError } from "../providers/seerr/guard.js";
+import {
+  SeerrAccessChallengeError,
+  SeerrClient,
+  SeerrUnreachableError,
+} from "../providers/seerr/client.js";
+import {
+  assertPublicSeerrUrl,
+  BlockedAddressError,
+  ResolutionUnavailableError,
+  UnresolvableAddressError,
+} from "../providers/seerr/guard.js";
 import type { TenantResolver } from "../providers/seerr/tenants.js";
 import { describeError } from "../core/errors.js";
 
@@ -55,22 +69,35 @@ export function registerAccountRoutes(
       : {};
   const putRateLimitConfig = ipRateLimited("/api/v1/account/connection");
 
-  async function sessionOf(request: FastifyRequest): Promise<Session | undefined> {
-    const cookies = (request as unknown as { cookies?: Record<string, string | undefined> }).cookies;
+  async function sessionOf(
+    request: FastifyRequest,
+  ): Promise<Session | undefined> {
+    const cookies = (
+      request as unknown as { cookies?: Record<string, string | undefined> }
+    ).cookies;
     const cookie = cookies?.[SESSION_COOKIE];
-    return readSession(cookie, config.signingKey, config.issuer, async (check) => {
-      if (check.id && (await store.isSessionRevoked(check.id))) return true;
-      // A cookie with no iat cannot be placed before or after a deletion, so
-      // it is treated as issued at the dawn of time: refused once its subject
-      // has ever been deleted, which is the safer reading.
-      return store.isSubjectSessionRevoked(check.subject, check.issuedAt ?? 0);
-    });
+    return readSession(
+      cookie,
+      config.signingKey,
+      config.issuer,
+      async (check) => {
+        if (check.id && (await store.isSessionRevoked(check.id))) return true;
+        // A cookie with no iat cannot be placed before or after a deletion, so
+        // it is treated as issued at the dawn of time: refused once its subject
+        // has ever been deleted, which is the safer reading.
+        return store.isSubjectSessionRevoked(
+          check.subject,
+          check.issuedAt ?? 0,
+        );
+      },
+    );
   }
 
   function requireEncryption(reply: FastifyReply): Buffer | undefined {
     if (!config.encryptionKey) {
       reply.status(503).send({
-        error: "this server cannot store connections: SEERRSENSE_ENCRYPTION_KEY is not set",
+        error:
+          "this server cannot store connections: SEERRSENSE_ENCRYPTION_KEY is not set",
       });
       return undefined;
     }
@@ -96,107 +123,148 @@ export function registerAccountRoutes(
     });
   });
 
-  fastify.put("/api/v1/account/connection", putRateLimitConfig, async (request, reply) => {
-    const session = await sessionOf(request);
-    if (!session) return reply.status(401).send({ error: "not signed in" });
-    const key = requireEncryption(reply);
-    if (!key) return reply;
+  fastify.put(
+    "/api/v1/account/connection",
+    putRateLimitConfig,
+    async (request, reply) => {
+      const session = await sessionOf(request);
+      if (!session) return reply.status(401).send({ error: "not signed in" });
+      const key = requireEncryption(reply);
+      if (!key) return reply;
 
-    const body = ConnectionSchema.safeParse(request.body ?? {});
-    if (!body.success) {
-      return reply.status(400).send({ error: body.error.issues[0]?.message ?? "invalid request" });
-    }
-
-    const existing = await store.getUserConnection(session.subject);
-    const apiKey = body.data.apiKey?.trim()
-      ? body.data.apiKey.trim()
-      : existing
-        ? open(existing.seerrApiKeySealed, key)
-        : undefined;
-    if (!apiKey) {
-      return reply.status(400).send({ error: "an API key is required the first time" });
-    }
-
-    // Validate the address before any network call is made at all: this is
-    // what makes it true that a blocked address is never dialled, not even
-    // once, to prove the credentials.
-    try {
-      await assertPublicSeerrUrl(body.data.seerrUrl, { lookup: deps.lookup });
-    } catch (error) {
-      if (error instanceof UnresolvableAddressError) {
-        request.log.info({ reason: error.message }, "rejected a Seerr connection address");
-        return reply.status(400).send({
-          error: "That address did not resolve. Check it for a typo, and that it is the address you open Seerr at.",
-        });
+      const body = ConnectionSchema.safeParse(request.body ?? {});
+      if (!body.success) {
+        return reply
+          .status(400)
+          .send({ error: body.error.issues[0]?.message ?? "invalid request" });
       }
-      if (error instanceof BlockedAddressError) {
-        // The address itself is the person's own infrastructure and stays out
-        // of the log; that it was blocked, and why, is all an operator needs.
-        request.log.warn({ reason: error.message }, "rejected a Seerr connection address");
-        return reply.status(400).send({ error: "That address cannot be used. Check it and try again." });
+
+      const existing = await store.getUserConnection(session.subject);
+      const apiKey = body.data.apiKey?.trim()
+        ? body.data.apiKey.trim()
+        : existing
+          ? open(existing.seerrApiKeySealed, key)
+          : undefined;
+      if (!apiKey) {
+        return reply
+          .status(400)
+          .send({ error: "an API key is required the first time" });
       }
-      throw error;
-    }
 
-    const candidate = new SeerrClient({
-      baseUrl: body.data.seerrUrl,
-      apiKey,
-      cfAccessClientId: body.data.cfAccessClientId,
-      cfAccessClientSecret: body.data.cfAccessClientSecret,
-      untrusted: true,
-      lookup: deps.lookup,
-    });
+      // Validate the address before any network call is made at all: this is
+      // what makes it true that a blocked address is never dialled, not even
+      // once, to prove the credentials.
+      try {
+        await assertPublicSeerrUrl(body.data.seerrUrl, { lookup: deps.lookup });
+      } catch (error) {
+        // The DNS code, not the constant message: it is the only part of this
+        // that an operator cannot infer from the log line itself.
+        if (error instanceof UnresolvableAddressError) {
+          request.log.info(
+            { dns: error.code },
+            "rejected a Seerr connection address that does not resolve",
+          );
+          return reply.status(400).send({
+            error:
+              "That address did not resolve. Check it for a typo, and that it is the address you open Seerr at.",
+          });
+        }
+        // Our resolver, not their address: say so, and do not send anyone
+        // hunting a typo that is not there.
+        if (error instanceof ResolutionUnavailableError) {
+          request.log.warn(
+            { dns: error.code },
+            "could not resolve a Seerr connection address",
+          );
+          return reply.status(503).header("retry-after", "30").send({
+            error:
+              "Could not check that address just now — the name server did not answer. Try again in a moment.",
+          });
+        }
+        if (error instanceof BlockedAddressError) {
+          // The address itself is the person's own infrastructure and stays out
+          // of the log; that it was blocked, and why, is all an operator needs.
+          request.log.warn(
+            { reason: error.message },
+            "rejected a Seerr connection address",
+          );
+          return reply
+            .status(400)
+            .send({
+              error: "That address cannot be used. Check it and try again.",
+            });
+        }
+        throw error;
+      }
 
-    // Prove the credentials before storing them: a typo in the key would
-    // otherwise only surface later, inside an assistant, as an opaque failure.
-    // The candidate exists only to prove the credentials; its pinned
-    // dispatcher must not outlive that, or every PUT leaks an agent.
-    let seerrUser: string | undefined;
-    try {
-      seerrUser = await candidate.describeSelf();
-    } catch (error) {
-      void candidate.close();
-      request.log.info({ err: describeError(error) }, "rejected a Seerr connection that did not answer");
-      if (error instanceof SeerrAccessChallengeError) {
+      const candidate = new SeerrClient({
+        baseUrl: body.data.seerrUrl,
+        apiKey,
+        cfAccessClientId: body.data.cfAccessClientId,
+        cfAccessClientSecret: body.data.cfAccessClientSecret,
+        untrusted: true,
+        lookup: deps.lookup,
+      });
+
+      // Prove the credentials before storing them: a typo in the key would
+      // otherwise only surface later, inside an assistant, as an opaque failure.
+      // The candidate exists only to prove the credentials; its pinned
+      // dispatcher must not outlive that, or every PUT leaks an agent.
+      let seerrUser: string | undefined;
+      try {
+        seerrUser = await candidate.describeSelf();
+      } catch (error) {
+        void candidate.close();
+        request.log.info(
+          { err: describeError(error) },
+          "rejected a Seerr connection that did not answer",
+        );
+        if (error instanceof SeerrAccessChallengeError) {
+          return reply.status(400).send({
+            error:
+              "That address is behind Cloudflare Access — fill in the Zero Trust fields " +
+              "(CF-Access-Client-Id and CF-Access-Client-Secret).",
+          });
+        }
+        if (
+          error instanceof SeerrUnreachableError ||
+          error instanceof BlockedAddressError
+        ) {
+          return reply.status(400).send({
+            error:
+              "Could not reach that Seerr. Check the address and key and try again.",
+          });
+        }
         return reply.status(400).send({
           error:
-            "That address is behind Cloudflare Access — fill in the Zero Trust fields " +
-            "(CF-Access-Client-Id and CF-Access-Client-Secret).",
+            "That Seerr did not accept the address and key. Check both and try again.",
         });
       }
-      if (error instanceof SeerrUnreachableError || error instanceof BlockedAddressError) {
-        return reply.status(400).send({
-          error: "Could not reach that Seerr. Check the address and key and try again.",
-        });
-      }
-      return reply.status(400).send({
-        error: "That Seerr did not accept the address and key. Check both and try again.",
+      void candidate.close();
+
+      await store.putUserConnection({
+        subject: session.subject,
+        email: session.email,
+        seerrUrl: body.data.seerrUrl.replace(/\/$/, ""),
+        seerrApiKeySealed: seal(apiKey, key),
+        cfAccessClientIdSealed: body.data.cfAccessClientId
+          ? seal(body.data.cfAccessClientId, key)
+          : undefined,
+        cfAccessClientSecretSealed: body.data.cfAccessClientSecret
+          ? seal(body.data.cfAccessClientSecret, key)
+          : undefined,
+        updatedAt: Date.now(),
       });
-    }
-    void candidate.close();
+      // Without this the person keeps reaching the old instance for a minute.
+      tenants.forget(session.subject);
 
-    await store.putUserConnection({
-      subject: session.subject,
-      email: session.email,
-      seerrUrl: body.data.seerrUrl.replace(/\/$/, ""),
-      seerrApiKeySealed: seal(apiKey, key),
-      cfAccessClientIdSealed: body.data.cfAccessClientId
-        ? seal(body.data.cfAccessClientId, key)
-        : undefined,
-      cfAccessClientSecretSealed: body.data.cfAccessClientSecret
-        ? seal(body.data.cfAccessClientSecret, key)
-        : undefined,
-      updatedAt: Date.now(),
-    });
-    // Without this the person keeps reaching the old instance for a minute.
-    tenants.forget(session.subject);
-
-    return reply.header("cache-control", "no-store").send({
-      connected: true,
-      seerrUrl: body.data.seerrUrl.replace(/\/$/, ""),
-      seerrUser,
-    });
-  });
+      return reply.header("cache-control", "no-store").send({
+        connected: true,
+        seerrUrl: body.data.seerrUrl.replace(/\/$/, ""),
+        seerrUser,
+      });
+    },
+  );
 
   fastify.delete("/api/v1/account/connection", async (request, reply) => {
     const session = await sessionOf(request);
@@ -219,36 +287,44 @@ export function registerAccountRoutes(
   // `sub`, so deleting and signing in again yields the same subject with a
   // fresh resolve counter; unmetered, that would be a free daily budget
   // reset. A handful per five minutes keeps it a deletion, not a loop.
-  fastify.delete("/api/v1/account", ipRateLimited("/api/v1/account"), async (request, reply) => {
-    const session = await sessionOf(request);
-    if (!session) return reply.status(401).send({ error: "not signed in" });
-    // Sessions first, data second: the other way round leaves one round trip
-    // in which another device's still-valid cookie can PUT a fresh connection
-    // row for a subject who has just been forgotten — and that table is never
-    // swept. With the sessions gone first, nothing can write after the delete.
-    const now = Date.now();
-    // A JWT's iat has one-second resolution, so "everything issued before
-    // now" is everything issued before this second began; a cookie minted in
-    // the same second as the deletion cannot be told apart from one minted
-    // just after it. The session that asked is revoked by its jti as well, so
-    // that one is covered regardless of timing.
-    const before = Math.floor(now / 1000) * 1000 - 1;
-    await store.revokeSubjectSessions(session.subject, before, now + SESSION_TTL_SECONDS * 1000);
-    if (session.id && session.expiresAt) {
-      await store.revokeSession(session.id, session.expiresAt);
-    }
-    await store.deleteSubject(session.subject);
-    tenants.forget(session.subject);
-    return reply
-      .header("cache-control", "no-store")
-      .clearCookie(SESSION_COOKIE, {
-        path: "/",
-        httpOnly: true,
-        sameSite: "lax",
-        secure: config.issuer.startsWith("https://"),
-      })
-      .send({ deleted: true });
-  });
+  fastify.delete(
+    "/api/v1/account",
+    ipRateLimited("/api/v1/account"),
+    async (request, reply) => {
+      const session = await sessionOf(request);
+      if (!session) return reply.status(401).send({ error: "not signed in" });
+      // Sessions first, data second: the other way round leaves one round trip
+      // in which another device's still-valid cookie can PUT a fresh connection
+      // row for a subject who has just been forgotten — and that table is never
+      // swept. With the sessions gone first, nothing can write after the delete.
+      const now = Date.now();
+      // A JWT's iat has one-second resolution, so "everything issued before
+      // now" is everything issued before this second began; a cookie minted in
+      // the same second as the deletion cannot be told apart from one minted
+      // just after it. The session that asked is revoked by its jti as well, so
+      // that one is covered regardless of timing.
+      const before = Math.floor(now / 1000) * 1000 - 1;
+      await store.revokeSubjectSessions(
+        session.subject,
+        before,
+        now + SESSION_TTL_SECONDS * 1000,
+      );
+      if (session.id && session.expiresAt) {
+        await store.revokeSession(session.id, session.expiresAt);
+      }
+      await store.deleteSubject(session.subject);
+      tenants.forget(session.subject);
+      return reply
+        .header("cache-control", "no-store")
+        .clearCookie(SESSION_COOKIE, {
+          path: "/",
+          httpOnly: true,
+          sameSite: "lax",
+          secure: config.issuer.startsWith("https://"),
+        })
+        .send({ deleted: true });
+    },
+  );
 
   // Ends the browser session only. MCP grants (refresh and access tokens) are
   // untouched here — those are revoked only via POST /oauth/revoke — so

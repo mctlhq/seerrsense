@@ -154,9 +154,17 @@
   // guess that a scheme is missing. https is the only scheme the server
   // accepts, so filling it in is not a guess.
   var urlField = document.getElementById("seerr-url");
-  urlField.addEventListener("blur", function () {
+  function fillInScheme() {
     var value = urlField.value.trim();
     if (value && !value.includes("://")) urlField.value = "https://" + value;
+  }
+  // Both ways out of the field. Enter is the commonest — it submits without
+  // ever blurring, and constraint validation would run on the unprefixed
+  // value and show the same bubble; keydown fires before that. A submit
+  // listener would be too late for the same reason.
+  urlField.addEventListener("blur", fillInScheme);
+  urlField.addEventListener("keydown", function (event) {
+    if (event.key === "Enter") fillInScheme();
   });
 
   function show(message, kind) {

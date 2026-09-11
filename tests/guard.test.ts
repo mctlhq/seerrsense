@@ -3,6 +3,7 @@ import {
   assertPublicSeerrUrl,
   BlockedAddressError,
   isBlockedAddress,
+  ResolutionUnavailableError,
   UnresolvableAddressError,
 } from "../src/providers/seerr/guard.js";
 
@@ -62,7 +63,7 @@ describe("assertPublicSeerrUrl", () => {
     // assertPublicSeerrUrl and the account page answered 500 "internal error"
     // for a typo. ENOTFOUND, EAI_AGAIN and ENODATA are the three a caller can
     // provoke; anything else is a real fault and must keep its stack.
-    for (const code of ["ENOTFOUND", "EAI_AGAIN", "ENODATA"]) {
+    for (const code of ["ENOTFOUND", "ENODATA"]) {
       const lookup = async () => {
         throw Object.assign(
           new Error(`getaddrinfo ${code} media.example.com`),
@@ -82,6 +83,24 @@ describe("assertPublicSeerrUrl", () => {
     await expect(
       assertPublicSeerrUrl("https://media.example.com", { lookup: empty }),
     ).rejects.toBeInstanceOf(UnresolvableAddressError);
+    // EAI_AGAIN is the resolver failing to answer, not an answer about the
+    // name: nothing has been learned, so it is not reported as a typo.
+    const servfail = async () => {
+      throw Object.assign(
+        new Error("getaddrinfo EAI_AGAIN media.example.com"),
+        { code: "EAI_AGAIN" },
+      );
+    };
+    await expect(
+      assertPublicSeerrUrl("https://media.example.com", { lookup: servfail }),
+    ).rejects.toBeInstanceOf(ResolutionUnavailableError);
+    await expect(
+      assertPublicSeerrUrl("https://media.example.com", { lookup: servfail }),
+    ).rejects.not.toBeInstanceOf(UnresolvableAddressError);
+    await expect(
+      assertPublicSeerrUrl("https://media.example.com", { lookup: servfail }),
+    ).rejects.toBeInstanceOf(BlockedAddressError);
+
     const broken = async () => {
       throw new TypeError("lookup is not a function");
     };

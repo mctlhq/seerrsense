@@ -515,6 +515,32 @@ describe("attaching a Seerr", () => {
     await app.close();
   });
 
+  it("answers 503, not a typo hint, when the resolver itself is down", async () => {
+    // EAI_AGAIN is cluster DNS wobbling. Telling the person their address is
+    // wrong would send them hunting a typo that is not there, and a 400 would
+    // tell a client never to retry.
+    const servfail = async () => {
+      throw Object.assign(new Error("getaddrinfo EAI_AGAIN mine.example"), { code: "EAI_AGAIN" });
+    };
+    const app = buildServer({ fetchImpl: stubFetch as unknown as typeof fetch, lookup: servfail });
+    await app.ready();
+    const cookie = await signIn(app);
+    seerrCalls = [];
+
+    const response = await app.inject({
+      method: "PUT",
+      url: "/api/v1/account/connection",
+      headers: { cookie },
+      payload: { seerrUrl: "https://mine.example", apiKey: "my-key" },
+    });
+    expect(response.statusCode).toBe(503);
+    expect(response.headers["retry-after"]).toBe("30");
+    expect(response.json().error).toMatch(/name server did not answer/);
+    expect(response.json().error).not.toMatch(/typo/);
+    expect(seerrCalls).toEqual([]);
+    await app.close();
+  });
+
   it("names Cloudflare Access rather than the generic failure", async () => {
     const app = await makeApp();
     const cookie = await signIn(app);
