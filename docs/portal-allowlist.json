@@ -1,0 +1,33 @@
+{
+  "$comment": "Source of truth for the Cloudflare MCP portal mapping of server `seerrsense` (mctlhq/.github#35). Every tool this server registers must appear here with an explicit decision; tests/portal-allowlist.test.ts fails the build otherwise. An enabled tool must carry a `reason` that says what it exposes or changes and why that is acceptable on a shared surface \u2014 a write tool must additionally be named in writeToolsOnPortal in that test. Apply with the same operator-run flow as the other upstreams (mctl-telegram scripts/portal-allowlist-apply.sh, one file per server).",
+  "portal": "mcp",
+  "server": "seerrsense",
+  "default_disabled": true,
+  "tools": [
+    {
+      "name": "whoami",
+      "enabled": true,
+      "reason": "Returns who the session is authenticated as and whose Seerr it reaches; reads nothing from the catalogue and names no title."
+    },
+    {
+      "name": "search_media",
+      "enabled": true,
+      "reason": "Searches the household's catalogue by title and returns TMDB matches; exposes what the connected Seerr can see, not what anyone watched."
+    },
+    {
+      "name": "resolve_media",
+      "enabled": true,
+      "reason": "Resolves a title to a single TMDB id, returning the same catalogue-shaped data as search_media and no viewing history."
+    },
+    {
+      "name": "get_media",
+      "enabled": true,
+      "reason": "Returns one title's availability and request state in the household's Seerr; catalogue metadata, no personal viewing data."
+    },
+    {
+      "name": "request_media",
+      "enabled": true,
+      "reason": "Files a request in the household's own Overseerr or Jellyseerr, which fetches media and consumes their storage and bandwidth. Enabled on the shared portal by owner decision 2026-09-12 (mctlhq/.github#35): the portal decides visibility, and the tool's own seerr:request scope check decides whether the request is actually filed."
+    }
+  ]
+}
