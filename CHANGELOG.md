@@ -1,5 +1,13 @@
 # Changelog
 
+## [1.11.0](https://github.com/mctlhq/seerrsense/compare/1.10.4...1.11.0) (2026-09-12)
+
+
+### Features
+
+* **portal:** pin the seerrsense tool exposure and guard it ([6900d5a](https://github.com/mctlhq/seerrsense/commit/6900d5a023c5696a5918953f94ad822d607597ad))
+* **portal:** pin the seerrsense tool exposure and guard it ([0efe127](https://github.com/mctlhq/seerrsense/commit/0efe127a9249c50d35ded0a1802041bd95f01b56))
+
 ## [1.10.4](https://github.com/mctlhq/seerrsense/compare/1.10.3...1.10.4) (2026-09-11)
 
 
