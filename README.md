@@ -405,7 +405,9 @@ authorization server.
 - **Scopes are `seerr:read`, `seerr:request` and `offline_access`.** Only those
   are advertised, because a scope advertised but not granted makes clients warn
   the user about permissions on a token that works. `request_media` checks for
-  `seerr:request` itself.
+  `seerr:request` itself. An authorization request that names no scope, as an
+  MCP gateway's upstream sign-in does, is granted `seerr:read seerr:request`;
+  the consent page lists both before anything is issued.
 - The shared `SEERRSENSE_AUTH_TOKEN` is compared in constant time and, once
   OAuth is configured, **not accepted unless `SEERRSENSE_LEGACY_TOKEN_ENABLED`
   is exactly `true`**. Without OAuth it is the only credential and stays on

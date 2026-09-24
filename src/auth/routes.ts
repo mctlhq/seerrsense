@@ -3,7 +3,7 @@ import { describeError } from "../core/errors.js";
 import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 import { z } from "zod";
 import { ClientResolutionError, ClientResolver, isAllowedRedirectUri } from "./clients.js";
-import { SCOPE_OFFLINE, SCOPE_READ, SUPPORTED_SCOPES, type OAuthConfig } from "./config.js";
+import { DEFAULT_SCOPES, SCOPE_OFFLINE, SUPPORTED_SCOPES, type OAuthConfig } from "./config.js";
 import { hashToken, isValidPkceString, randomToken, verifyPkceS256 } from "./crypto.js";
 import { GoogleOidc } from "./google.js";
 import type { AuthStore } from "./store.js";
@@ -327,7 +327,7 @@ export function registerOAuthRoutes(
         `this server only issues tokens for ${config.resource}`, params.state, config.issuer);
     }
 
-    const requested = (params.scope ?? SCOPE_READ).split(/\s+/).filter(Boolean);
+    const requested = (params.scope ?? DEFAULT_SCOPES.join(" ")).split(/\s+/).filter(Boolean);
     const unknown = requested.filter((scope) => !SUPPORTED_SCOPES.includes(scope as never));
     if (unknown.length > 0) {
       return redirectError(reply, params.redirect_uri, "invalid_scope",

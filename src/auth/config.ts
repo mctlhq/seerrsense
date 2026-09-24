@@ -16,6 +16,17 @@ export const SCOPE_REQUEST = "seerr:request";
 export const SCOPE_OFFLINE = "offline_access";
 export const SUPPORTED_SCOPES = [SCOPE_READ, SCOPE_REQUEST, SCOPE_OFFLINE] as const;
 
+/**
+ * What an authorization request with no scope parameter is granted (RFC 6749
+ * §3.3 lets the server pick a documented default). It is the full working set,
+ * not read alone: an MCP gateway such as the Cloudflare portal authorizes its
+ * upstreams without naming a scope, and a read-only default left it holding a
+ * token that could search but never request, with nothing the user could do on
+ * their side to widen it. The consent page still lists both before anything is
+ * granted, and a client that names its scopes gets exactly those.
+ */
+export const DEFAULT_SCOPES = [SCOPE_READ, SCOPE_REQUEST] as const;
+
 const OAuthEnvSchema = z.object({
   SEERRSENSE_PUBLIC_URL: z.string().url().optional(),
   GOOGLE_OAUTH_CLIENT_ID: z.string().min(1).optional(),

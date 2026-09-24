@@ -111,7 +111,8 @@ async function makeApp() {
 }
 
 /** Drives authorize → Google callback and stops with an unredeemed code. */
-async function getAuthorizationCode(app: any, options: { scope?: string; verifier?: string } = {}) {
+/** `scope: null` sends no scope parameter at all, as an MCP gateway does. */
+async function getAuthorizationCode(app: any, options: { scope?: string | null; verifier?: string } = {}) {
   const verifier = options.verifier ?? makeVerifier();
   const authorize = await app.inject({
     method: "GET",
@@ -123,7 +124,7 @@ async function getAuthorizationCode(app: any, options: { scope?: string; verifie
       code_challenge: challengeFor(verifier),
       code_challenge_method: "S256",
       state: "client-state",
-      scope: options.scope ?? "seerr:read seerr:request",
+      ...(options.scope === null ? {} : { scope: options.scope ?? "seerr:read seerr:request" }),
       resource: RESOURCE,
     },
   });
@@ -169,7 +170,7 @@ async function approveConsent(app: any, html: string): Promise<string> {
 }
 
 /** The whole flow, ending with the token response. */
-async function runFlow(app: any, options: { scope?: string; verifier?: string } = {}) {
+async function runFlow(app: any, options: { scope?: string | null; verifier?: string } = {}) {
   const { code, verifier, googleUrl } = await getAuthorizationCode(app, options);
   const token = await app.inject({
     method: "POST",
@@ -918,6 +919,40 @@ describe("native clients", () => {
 });
 
 describe("scope and resource negotiation", () => {
+  it("grants read and request when the client names no scope", async () => {
+    const app = await makeApp();
+    const { token } = await runFlow(app, { scope: null });
+    expect(token.statusCode).toBe(200);
+    const body = JSON.parse(token.payload);
+    expect(body.scope).toBe("seerr:read seerr:request");
+
+    const call = await app.inject({
+      method: "POST",
+      url: "/mcp",
+      headers: {
+        authorization: `Bearer ${body.access_token}`,
+        "content-type": "application/json",
+        accept: "application/json, text/event-stream",
+      },
+      payload: {
+        jsonrpc: "2.0",
+        id: 1,
+        method: "tools/call",
+        params: { name: "request_media", arguments: { mediaType: "movie", tmdbId: 27205 } },
+      },
+    });
+    expect(call.statusCode).toBe(200);
+    expect(call.payload).not.toContain("not granted");
+    await app.close();
+  });
+
+  it("keeps a named read-only scope read-only", async () => {
+    const app = await makeApp();
+    const { token } = await runFlow(app, { scope: "seerr:read" });
+    expect(JSON.parse(token.payload).scope).toBe("seerr:read");
+    await app.close();
+  });
+
   it("grants offline_access when a client asks for it", async () => {
     const app = await makeApp();
     const { token } = await runFlow(app, { scope: "seerr:read offline_access" });
