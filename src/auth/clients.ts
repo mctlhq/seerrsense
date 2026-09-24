@@ -1,15 +1,29 @@
 import { z } from "zod";
+import type { RegisteredClient } from "./store.js";
+
+/**
+ * The wider default scope granted to a client that registered through
+ * `POST /register` and named no `scope` of its own. Declared here rather than
+ * in config.ts to avoid an import cycle: config.ts already imports from this
+ * file for ResolvedClient and parsePreRegisteredClients.
+ */
+export const DCR_DEFAULT_SCOPE = "seerr:read seerr:request";
 
 /**
  * A resolved OAuth client. Under Client ID Metadata Documents the client_id is
  * itself an https URL naming a document that lists the allowed redirect URIs,
- * so there is no client registry to keep.
+ * so there is no client registry to keep. A `"dcr"` client is registered
+ * through `POST /register` and looked up in the store instead.
  */
 export interface ResolvedClient {
   clientId: string;
   clientName: string;
   redirectUris: string[];
-  source: "cimd" | "pre-registered";
+  source: "cimd" | "pre-registered" | "dcr";
+  /** The scope to grant when /oauth/authorize sees no explicit scope. Only
+   * ever set for source: "dcr" — CIMD and pre-registered clients keep the
+   * server-wide SCOPE_READ default. */
+  defaultScope?: string;
 }
 
 /** MCP 2026-07-28 requires client_id, client_name and redirect_uris. */
@@ -35,9 +49,10 @@ interface CacheEntry {
  * Resolves a client_id to its metadata.
  *
  * Pre-registered clients win: they are configured by the operator and need no
- * network call. Anything else must be a Client ID Metadata Document URL, which
- * is fetched and validated per the 2026-07-28 client-registration spec.
- * Dynamic Client Registration is deprecated there and is not implemented.
+ * network call. Next, a client registered through `POST /register` (RFC
+ * 7591), if the server has a registered-client store — also no network call.
+ * Anything else must be a Client ID Metadata Document URL, which is fetched
+ * and validated per the 2026-07-28 client-registration spec.
  */
 export class ClientResolver {
   private cache = new Map<string, CacheEntry>();
@@ -46,11 +61,31 @@ export class ClientResolver {
     private readonly preRegistered: ResolvedClient[] = [],
     private readonly fetchImpl: typeof fetch = fetch,
     private readonly maxBodyBytes = 64 * 1024,
+    /** Narrow structural type rather than AuthStore, so this file keeps
+     * importing only types from store.ts. */
+    private readonly registered?: {
+      getRegisteredClient(clientId: string): Promise<RegisteredClient | undefined>;
+    },
   ) {}
 
   async resolve(clientId: string): Promise<ResolvedClient> {
     const preset = this.preRegistered.find((c) => c.clientId === clientId);
     if (preset) return preset;
+
+    // Checked before the https:// requirement below: a minted client_id is
+    // never an https URL (dcr_${randomToken()}), so this ordering is belt and
+    // braces rather than load-bearing — but it means a DCR client_id is never
+    // mistakenly sent through fetchMetadata.
+    const dcr = await this.registered?.getRegisteredClient(clientId);
+    if (dcr) {
+      return {
+        clientId: dcr.clientId,
+        clientName: dcr.clientName,
+        redirectUris: dcr.redirectUris,
+        source: "dcr",
+        defaultScope: dcr.scope ?? DCR_DEFAULT_SCOPE,
+      };
+    }
 
     if (!clientId.startsWith("https://")) {
       throw new ClientResolutionError(
@@ -166,7 +201,7 @@ export function isAllowedRedirectUri(client: ResolvedClient, redirectUri: string
   });
 }
 
-function parseRedirectUri(value: string): URL | undefined {
+export function parseRedirectUri(value: string): URL | undefined {
   let url: URL;
   try {
     url = new URL(value);

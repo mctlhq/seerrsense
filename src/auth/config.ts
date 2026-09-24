@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { parsePreRegisteredClients, type ResolvedClient } from "./clients.js";
+import { parsePreRegisteredClients, parseRedirectUri, type ResolvedClient } from "./clients.js";
 import { encryptionKeyFrom } from "./crypto.js";
 
 /**
@@ -26,6 +26,7 @@ const OAuthEnvSchema = z.object({
   SEERRSENSE_HOUSEHOLD_EMAILS: z.string().optional(),
   SEERRSENSE_ENCRYPTION_KEY: z.string().optional(),
   SEERRSENSE_OAUTH_CLIENTS: z.string().optional(),
+  SEERRSENSE_DCR_REDIRECT_URIS: z.string().optional(),
   SEERRSENSE_LEGACY_TOKEN_ENABLED: z.string().optional(),
   SEERRSENSE_ACCESS_TOKEN_TTL: z.coerce.number().int().positive().max(24 * 3600).default(3600),
   SEERRSENSE_REFRESH_TOKEN_TTL: z.coerce.number().int().positive().default(30 * 24 * 3600),
@@ -58,6 +59,16 @@ export interface OAuthConfig {
    */
   householdEmails: Set<string>;
   preRegisteredClients: ResolvedClient[];
+  /**
+   * Redirect URIs a Dynamic Client Registration may claim. Empty by default —
+   * unset and set-and-empty both mean off, so `/register` is 404 and absent
+   * from metadata on any deployment that has not opted in. There is
+   * deliberately no built-in default: the mctl portal callback
+   * (`https://mcp.mctl.ai/servers-callback`) is one operator's value and
+   * belongs in that deployment's own gitops values, not in the image every
+   * self-hoster runs.
+   */
+  dcrRedirectUris: string[];
   accessTokenTtl: number;
   refreshTokenTtl: number;
   databaseUrl?: string;
@@ -75,6 +86,28 @@ export interface AuthSettings {
  * a flow that always fails; falling back to the legacy token is the honest
  * behaviour for a self-hoster who set none of this up.
  */
+/**
+ * Parses SEERRSENSE_DCR_REDIRECT_URIS: comma-separated, trimmed, empties
+ * dropped — unset and set-and-empty both mean `[]` (DCR off), the same
+ * fail-closed polarity as allowedEmails and householdEmails. Each surviving
+ * entry is validated with the same rules `isAllowedRedirectUri` applies to a
+ * requested redirect_uri (parseable URL, no userinfo); a bad entry throws,
+ * matching how parsePreRegisteredClients throws on a malformed
+ * SEERRSENSE_OAUTH_CLIENTS entry rather than silently dropping it.
+ */
+function parseDcrRedirectUris(raw: string | undefined): string[] {
+  const entries = (raw ?? "")
+    .split(",")
+    .map((uri) => uri.trim())
+    .filter(Boolean);
+  for (const entry of entries) {
+    if (!parseRedirectUri(entry)) {
+      throw new Error(`SEERRSENSE_DCR_REDIRECT_URIS entry is not a valid redirect URI: ${entry}`);
+    }
+  }
+  return entries;
+}
+
 export function loadAuthSettings(
   env: Record<string, string | undefined>,
   legacyToken: string | undefined,
@@ -133,6 +166,7 @@ export function loadAuthSettings(
       .map((email) => email.trim().toLowerCase())
       .filter(Boolean),
   );
+  const dcrRedirectUris = parseDcrRedirectUris(parsed.SEERRSENSE_DCR_REDIRECT_URIS);
   const openSignup = parsed.SEERRSENSE_OPEN_SIGNUP === "true";
   if (openSignup && !parsed.SEERRSENSE_ENCRYPTION_KEY) {
     // Not a hard failure: a self-hoster may run open signup on a server they
@@ -173,6 +207,7 @@ export function loadAuthSettings(
         },
         ...parsePreRegisteredClients(parsed.SEERRSENSE_OAUTH_CLIENTS),
       ],
+      dcrRedirectUris,
       accessTokenTtl: parsed.SEERRSENSE_ACCESS_TOKEN_TTL,
       refreshTokenTtl: parsed.SEERRSENSE_REFRESH_TOKEN_TTL,
       databaseUrl: parsed.DATABASE_URL,

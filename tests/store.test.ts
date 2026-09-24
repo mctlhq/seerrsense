@@ -5,6 +5,7 @@ import {
   type AuthStore,
   type PendingAuth,
   type RefreshRecord,
+  type RegisteredClient,
   type UserConnection,
 } from "../src/auth/store.js";
 import { PostgresAuthStore } from "../src/auth/store-pg.js";
@@ -63,6 +64,14 @@ const refresh = (over: Partial<RefreshRecord> = {}): RefreshRecord => ({
   subject: "google:1",
   email: "someone@example.test",
   expiresAt: Date.now() + 86_400_000,
+  ...over,
+});
+
+const registeredClient = (over: Partial<RegisteredClient> = {}): RegisteredClient => ({
+  clientId: "dcr_1",
+  clientName: "Registered client",
+  redirectUris: ["https://mcp.mctl.ai/servers-callback"],
+  createdAt: Date.now(),
   ...over,
 });
 
@@ -350,5 +359,47 @@ describe.each(stores)("%s", (name, make) => {
     await store.purgeExpired();
     expect(await store.isSessionRevoked(expired)).toBe(false);
     expect(await store.isSessionRevoked(live)).toBe(true);
+  });
+
+  it("round-trips a registered client with a scope", async () => {
+    await fresh();
+    const clientId = id("dcr");
+    await store.putRegisteredClient(registeredClient({ clientId, scope: "seerr:read" }));
+    const found = await store.getRegisteredClient(clientId);
+    expect(found).toMatchObject({
+      clientId,
+      clientName: "Registered client",
+      redirectUris: ["https://mcp.mctl.ai/servers-callback"],
+      scope: "seerr:read",
+    });
+  });
+
+  it("round-trips a registered client with no scope", async () => {
+    await fresh();
+    const clientId = id("dcr");
+    await store.putRegisteredClient(registeredClient({ clientId, scope: undefined }));
+    const found = await store.getRegisteredClient(clientId);
+    expect(found?.scope).toBeUndefined();
+  });
+
+  it("returns undefined for a client_id that was never registered", async () => {
+    await fresh();
+    expect(await store.getRegisteredClient(id("never"))).toBeUndefined();
+  });
+
+  it("does not let purgeExpired remove a registered client", async () => {
+    await fresh();
+    const clientId = id("dcr");
+    await store.putRegisteredClient(registeredClient({ clientId }));
+    await store.purgeExpired();
+    expect(await store.getRegisteredClient(clientId)).toBeDefined();
+  });
+
+  it("stays idempotent on a second init() with the registered-clients table present", async () => {
+    await fresh();
+    await expect(store.init()).resolves.toBeUndefined();
+    const clientId = id("dcr");
+    await store.putRegisteredClient(registeredClient({ clientId }));
+    expect(await store.getRegisteredClient(clientId)).toBeDefined();
   });
 });

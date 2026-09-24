@@ -166,6 +166,7 @@ Setting some but not all is refused at startup.
 | `SEERRSENSE_OPEN_SIGNUP` | Set to exactly `true` to admit any Google account, ignoring `SEERRSENSE_ALLOWED_EMAILS`. Any other value — including `TRUE`, `1`, `yes` — means closed |
 | `SEERRSENSE_HOUSEHOLD_EMAILS` | Comma-separated addresses allowed to fall back to the shared `SEERR_URL` instance when they have no Seerr of their own attached. **Empty offers it to nobody signed in** — the legacy shared token and stdio mode are unaffected |
 | `SEERRSENSE_OAUTH_CLIENTS` | Optional pre-registered clients, `client_id=redirect_uri[,uri];...` |
+| `SEERRSENSE_DCR_REDIRECT_URIS` | Comma-separated allowlist of `redirect_uris` a Dynamic Client Registration (`POST /register`) may claim. **Unset or empty means registration is off**: `/register` answers 404 and `registration_endpoint` is absent from both authorization-server metadata documents. For the mctl Cloudflare portal, set it to `https://mcp.mctl.ai/servers-callback`. Registered clients are persisted in the store, so a deployment without `DATABASE_URL` loses them on restart |
 | `SEERRSENSE_LEGACY_TOKEN_ENABLED` | Whether `SEERRSENSE_AUTH_TOKEN` is accepted over HTTP. **Without OAuth: on unless set to `false`** (it is the only credential). **With OAuth: off unless set to exactly `true`** |
 | `SEERRSENSE_ACCESS_TOKEN_TTL` | Access token lifetime in seconds, default 3600 |
 | `SEERRSENSE_REFRESH_TOKEN_TTL` | Refresh token lifetime in seconds, default 30 days |
@@ -200,12 +201,19 @@ documents are served: `/.well-known/oauth-authorization-server`,
 
 Clients register through **Client ID Metadata Documents**: `client_id` is an
 https URL with a path, naming a JSON document that lists the client's
-`client_name` and allowed `redirect_uris`. Dynamic Client Registration is
-deprecated in MCP 2026-07-28 and is not implemented. A client that cannot
-publish a CIMD can instead be given a **pre-registered** entry via
-`SEERRSENSE_OAUTH_CLIENTS`, formatted as
-`client_id=redirect_uri[,redirect_uri...];...` (semicolon-separated entries,
-comma-separated redirect URIs within one entry).
+`client_name` and allowed `redirect_uris`. A client that cannot publish a CIMD
+can instead be given a **pre-registered** entry via `SEERRSENSE_OAUTH_CLIENTS`,
+formatted as `client_id=redirect_uri[,redirect_uri...];...`
+(semicolon-separated entries, comma-separated redirect URIs within one entry).
+
+For the one client that can do neither — the Cloudflare MCP portal, which
+needs Dynamic Client Registration to run in automatic mode — a narrow RFC 7591
+`POST /register` endpoint is available, restricted to an explicit
+redirect-URI allowlist (`SEERRSENSE_DCR_REDIRECT_URIS`). It is off by default:
+with the allowlist unset or empty, `/register` answers 404 and
+`registration_endpoint` is absent from the authorization-server metadata. See
+[Configuration](#configuration) and the scopes note in
+[Security Model](#security-model).
 
 ## Whose Seerr
 
@@ -384,9 +392,19 @@ authorization server.
   does.
 - **Clients register through Client ID Metadata Documents**, where the
   `client_id` is an https URL naming a JSON document with the client's allowed
-  redirect URIs. Pre-registered clients are supported too. Dynamic Client
-  Registration is deprecated in MCP 2026-07-28 and is not implemented; a client
-  that cannot use either path can be given a pre-registered entry instead.
+  redirect URIs. Pre-registered clients are supported too, via
+  `SEERRSENSE_OAUTH_CLIENTS`. For the one client that can present neither — the
+  Cloudflare MCP portal — a narrow RFC 7591 Dynamic Client Registration
+  endpoint, `POST /register`, is available, restricted to the redirect-URI
+  allowlist in `SEERRSENSE_DCR_REDIRECT_URIS`. **Empty means off**: unset or
+  set to the empty string, `/register` answers 404 and `registration_endpoint`
+  is absent from the authorization-server metadata, so no self-hosted
+  deployment changes behaviour by upgrading. A registration is refused with
+  RFC 7591 error codes when its `redirect_uris` are not all on the allowlist
+  (`invalid_redirect_uri`) or its other metadata falls outside what this
+  server supports (`invalid_client_metadata`); no `client_secret` is ever
+  issued and PKCE S256 stays mandatory. `POST /register` is metered like
+  `/oauth/authorize`, with the same `ipRateLimited` helper and budget.
 - **Redirect URIs match exactly, except for loopback**, where the port is
   ignored as RFC 8252 requires — a native client binds an ephemeral port and
   cannot declare it in advance. `localhost` and `127.0.0.1` stay distinct, and a
@@ -405,7 +423,14 @@ authorization server.
 - **Scopes are `seerr:read`, `seerr:request` and `offline_access`.** Only those
   are advertised, because a scope advertised but not granted makes clients warn
   the user about permissions on a token that works. `request_media` checks for
-  `seerr:request` itself.
+  `seerr:request` itself. When an authorization request names no `scope`, the
+  default depends on how the client is known: a CIMD or pre-registered client
+  still gets `seerr:read` only, unchanged; a DCR-registered client gets
+  `seerr:read seerr:request` unless it named a `scope` at registration, in
+  which case that registered scope is its default instead. An authorization
+  request that names an explicit `scope` always wins, for every client type.
+  The consent screen lists whatever will actually be granted, so the wider
+  default is visible before a token is ever issued.
 - The shared `SEERRSENSE_AUTH_TOKEN` is compared in constant time and, once
   OAuth is configured, **not accepted unless `SEERRSENSE_LEGACY_TOKEN_ENABLED`
   is exactly `true`**. Without OAuth it is the only credential and stays on

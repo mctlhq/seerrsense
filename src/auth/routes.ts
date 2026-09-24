@@ -2,7 +2,7 @@ import { createHmac } from "node:crypto";
 import { describeError } from "../core/errors.js";
 import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 import { z } from "zod";
-import { ClientResolutionError, ClientResolver, isAllowedRedirectUri } from "./clients.js";
+import { ClientResolutionError, ClientResolver, DCR_DEFAULT_SCOPE, isAllowedRedirectUri, type ResolvedClient } from "./clients.js";
 import { SCOPE_OFFLINE, SCOPE_READ, SUPPORTED_SCOPES, type OAuthConfig } from "./config.js";
 import { hashToken, isValidPkceString, randomToken, verifyPkceS256 } from "./crypto.js";
 import { GoogleOidc } from "./google.js";
@@ -31,6 +31,23 @@ const AuthorizeQuerySchema = z.object({
   resource: z.string().max(2048).optional(),
   login_hint: z.string().max(320).optional(),
 });
+
+/**
+ * RFC 7591 registration request. Every client-controlled string bounded, the
+ * same discipline AuthorizeQuerySchema applies: this is an unauthenticated
+ * endpoint, gated only by the redirect-URI allowlist.
+ */
+const RegisterBodySchema = z.object({
+  redirect_uris: z.array(z.string().max(2048)).min(1).max(8),
+  client_name: z.string().max(256).optional(),
+  token_endpoint_auth_method: z.string().max(64).optional(),
+  grant_types: z.array(z.string().max(64)).max(8).optional(),
+  response_types: z.array(z.string().max(64)).max(8).optional(),
+  scope: z.string().max(256).optional(),
+});
+
+const SUPPORTED_GRANT_TYPES = ["authorization_code", "refresh_token"];
+const SUPPORTED_RESPONSE_TYPES = ["code"];
 
 const TokenBodySchema = z.object({
   grant_type: z.enum(["authorization_code", "refresh_token"]),
@@ -249,11 +266,14 @@ export function registerOAuthRoutes(
     config.googleRedirectUri,
     deps.fetchImpl ?? fetch,
   );
-  const clients = new ClientResolver(config.preRegisteredClients, deps.fetchImpl ?? fetch);
+  const clients = new ClientResolver(config.preRegisteredClients, deps.fetchImpl ?? fetch, undefined, store);
 
-  // RFC 8414. registration_endpoint is deliberately absent: Dynamic Client
-  // Registration is deprecated in MCP 2026-07-28 in favour of Client ID
-  // Metadata Documents, which is what the flag below advertises.
+  // RFC 8414. registration_endpoint is present only while DCR is on: a narrow
+  // RFC 7591 fallback for a client that cannot present a Client ID Metadata
+  // Document (the Cloudflare MCP portal), gated by SEERRSENSE_DCR_REDIRECT_URIS
+  // being non-empty. Off by default, so a self-hoster who never sets that
+  // variable sees the same metadata as before.
+  const dcrEnabled = config.dcrRedirectUris.length > 0;
   const authorizationServerMetadata = {
     issuer: config.issuer,
     authorization_endpoint: `${config.issuer}/oauth/authorize`,
@@ -266,6 +286,7 @@ export function registerOAuthRoutes(
     scopes_supported: [...SUPPORTED_SCOPES],
     client_id_metadata_document_supported: true,
     authorization_response_iss_parameter_supported: true,
+    ...(dcrEnabled ? { registration_endpoint: `${config.issuer}/register` } : {}),
   };
 
   // RFC 9728. Served at both the bare path and the /mcp-suffixed one, because
@@ -293,6 +314,83 @@ export function registerOAuthRoutes(
   ]) {
     fastify.get(path, async (_request, reply) =>
       reply.header("cache-control", "public, max-age=3600").send(protectedResourceMetadata),
+    );
+  }
+
+  // RFC 7591 §3. Registered only while dcrEnabled: with no route to match,
+  // Fastify's not-found handler answers 404, which is what makes the endpoint
+  // disappear the moment the allowlist is emptied out, with nothing left to
+  // rate-limit either.
+  if (dcrEnabled) {
+    fastify.post(
+      "/register",
+      ipRateLimited(deps.rateLimit, "/register"),
+      async (request: FastifyRequest, reply: FastifyReply) => {
+        const body = RegisterBodySchema.safeParse(request.body ?? {});
+        if (!body.success) {
+          return oauthError(reply, 400, "invalid_redirect_uri", "redirect_uris is required and must not be empty");
+        }
+        const params = body.data;
+
+        // Reuses isAllowedRedirectUri against a synthetic client built from the
+        // allowlist, so registration and authorization can never disagree on
+        // what "matches" means: no prefix or wildcard matching, userinfo
+        // refused.
+        const allowlistClient: ResolvedClient = {
+          clientId: "__dcr_allowlist__",
+          clientName: "",
+          redirectUris: config.dcrRedirectUris,
+          source: "pre-registered",
+        };
+        const disallowed = params.redirect_uris.some(
+          (uri) => !isAllowedRedirectUri(allowlistClient, uri),
+        );
+        if (disallowed) {
+          return oauthError(reply, 400, "invalid_redirect_uri", "redirect_uris must all be on the allowlist");
+        }
+
+        if (params.token_endpoint_auth_method !== undefined && params.token_endpoint_auth_method !== "none") {
+          return oauthError(reply, 400, "invalid_client_metadata", "token_endpoint_auth_method must be \"none\"");
+        }
+        const grantTypes = params.grant_types ?? ["authorization_code", "refresh_token"];
+        if (grantTypes.some((g) => !SUPPORTED_GRANT_TYPES.includes(g))) {
+          return oauthError(reply, 400, "invalid_client_metadata", "unsupported grant_types");
+        }
+        const responseTypes = params.response_types ?? ["code"];
+        if (responseTypes.some((r) => !SUPPORTED_RESPONSE_TYPES.includes(r))) {
+          return oauthError(reply, 400, "invalid_client_metadata", "unsupported response_types");
+        }
+        if (params.scope !== undefined) {
+          const scopeTokens = params.scope.split(/\s+/).filter(Boolean);
+          if (scopeTokens.some((s) => !SUPPORTED_SCOPES.includes(s as never))) {
+            return oauthError(reply, 400, "invalid_client_metadata", "unsupported scope");
+          }
+        }
+
+        const clientId = `dcr_${randomToken()}`;
+        const clientName = params.client_name ?? "Registered client";
+        await store.putRegisteredClient({
+          clientId,
+          clientName,
+          redirectUris: params.redirect_uris,
+          scope: params.scope,
+          createdAt: Date.now(),
+        });
+
+        return reply
+          .status(201)
+          .header("cache-control", "no-store")
+          .send({
+            client_id: clientId,
+            client_id_issued_at: Math.floor(Date.now() / 1000),
+            redirect_uris: params.redirect_uris,
+            client_name: clientName,
+            token_endpoint_auth_method: "none",
+            grant_types: ["authorization_code", "refresh_token"],
+            response_types: ["code"],
+            scope: params.scope ?? DCR_DEFAULT_SCOPE,
+          });
+      },
     );
   }
 
@@ -327,7 +425,7 @@ export function registerOAuthRoutes(
         `this server only issues tokens for ${config.resource}`, params.state, config.issuer);
     }
 
-    const requested = (params.scope ?? SCOPE_READ).split(/\s+/).filter(Boolean);
+    const requested = (params.scope ?? client.defaultScope ?? SCOPE_READ).split(/\s+/).filter(Boolean);
     const unknown = requested.filter((scope) => !SUPPORTED_SCOPES.includes(scope as never));
     if (unknown.length > 0) {
       return redirectError(reply, params.redirect_uri, "invalid_scope",

@@ -71,6 +71,20 @@ export interface UserConnection {
   updatedAt: number;
 }
 
+/**
+ * A client registered through `POST /register` (RFC 7591). Persisted so a
+ * portal that registered once keeps resolving on the next authorize, across a
+ * restart or a rollout — see `MemoryAuthStore` and `PostgresAuthStore` below.
+ */
+export interface RegisteredClient {
+  clientId: string;
+  clientName: string;
+  redirectUris: string[];
+  /** RFC 7591 `scope` from the registration, if the client named one. */
+  scope?: string;
+  createdAt: number;
+}
+
 export interface AuthStore {
   init(): Promise<void>;
   putPendingAuth(pending: PendingAuth): Promise<void>;
@@ -88,6 +102,10 @@ export interface AuthStore {
   getUserConnection(subject: string): Promise<UserConnection | undefined>;
   putUserConnection(connection: UserConnection): Promise<void>;
   deleteUserConnection(subject: string): Promise<void>;
+  /** Persists a client registered through `POST /register`. */
+  putRegisteredClient(client: RegisteredClient): Promise<void>;
+  /** `undefined` when `clientId` was never registered, or was only ever pre-registered or CIMD. */
+  getRegisteredClient(clientId: string): Promise<RegisteredClient | undefined>;
   /**
    * Everything held about one person, gone in one call: the attached Seerr,
    * every refresh token (so every assistant is signed out), any login in
@@ -136,6 +154,10 @@ export class MemoryAuthStore implements AuthStore {
   private codes = new Map<string, AuthCode>();
   private refresh = new Map<string, RefreshRecord>();
   private connections = new Map<string, UserConnection>();
+  /** Clients registered through POST /register. Not swept by purgeExpired:
+   * a registration does not expire, the same reasoning that exempts
+   * user_connections. */
+  private registeredClients = new Map<string, RegisteredClient>();
   /** Keyed on `${subject} ${day}`; the day never contains a space, so
    * lastIndexOf(" ") splits it back unambiguously. */
   private resolveUsage = new Map<string, number>();
@@ -204,7 +226,9 @@ export class MemoryAuthStore implements AuthStore {
       if (record.expiresAt < now) this.revokedSubjects.delete(key);
     }
     // Connections are deliberately untouched: they do not expire, and losing one
-    // means a person's Seerr silently detaches.
+    // means a person's Seerr silently detaches. Registered clients are the same:
+    // a DCR registration does not expire either, and sweeping it would silently
+    // de-register the portal.
   }
 
   async getUserConnection(subject: string): Promise<UserConnection | undefined> {
@@ -217,6 +241,14 @@ export class MemoryAuthStore implements AuthStore {
 
   async deleteUserConnection(subject: string): Promise<void> {
     this.connections.delete(subject);
+  }
+
+  async putRegisteredClient(client: RegisteredClient): Promise<void> {
+    this.registeredClients.set(client.clientId, client);
+  }
+
+  async getRegisteredClient(clientId: string): Promise<RegisteredClient | undefined> {
+    return this.registeredClients.get(clientId);
   }
 
   async deleteSubject(subject: string): Promise<void> {
@@ -272,6 +304,7 @@ export class MemoryAuthStore implements AuthStore {
     this.connections.clear();
     this.resolveUsage.clear();
     this.revokedSessions.clear();
+    this.registeredClients.clear();
   }
 }
 
