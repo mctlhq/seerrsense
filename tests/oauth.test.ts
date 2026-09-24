@@ -4,6 +4,7 @@ import { SignJWT, exportJWK, generateKeyPair, type CryptoKey } from "jose";
 const SIGNING_KEY = new TextEncoder().encode("x".repeat(48));
 import { createHash, randomBytes } from "node:crypto";
 import { existsSync } from "node:fs";
+import { MemoryAuthStore } from "../src/auth/store.js";
 
 // The household Seerr. Both the singleton and the factory are stubbed:
 // the server builds its default client through the factory now.
@@ -1333,6 +1334,62 @@ describe("Dynamic Client Registration", () => {
       expect(JSON.parse(meta.payload).registration_endpoint, path).toBe(`${ISSUER}/register`);
     }
     await app.close();
+  });
+
+  it("rejects a previously-registered DCR client once the allowlist is emptied out, not just POST /register", async () => {
+    // A shared store across both apps: this proves the gap the "off switch"
+    // used to have. Emptying SEERRSENSE_DCR_REDIRECT_URIS closes the
+    // registration route, but a client_id minted while DCR was on still sat
+    // in the store — resolve() has to stop honoring it too, not just refuse
+    // new registrations.
+    process.env.SEERRSENSE_DCR_REDIRECT_URIS = PORTAL_CALLBACK;
+    const store = new MemoryAuthStore();
+    const appOn = buildServer({ fetchImpl: stubFetch as unknown as typeof fetch, store });
+    await appOn.ready();
+    const register = await registerDcrClient(appOn, { redirect_uris: [PORTAL_CALLBACK] });
+    expect(register.statusCode).toBe(201);
+    const clientId = JSON.parse(register.payload).client_id;
+
+    // Confirm it authorizes fine while DCR is still on, before flipping it off.
+    const authorizeWhileOn = await appOn.inject({
+      method: "GET",
+      url: "/oauth/authorize",
+      query: {
+        client_id: clientId,
+        redirect_uri: PORTAL_CALLBACK,
+        response_type: "code",
+        code_challenge: challengeFor(makeVerifier()),
+        code_challenge_method: "S256",
+      },
+    });
+    expect(authorizeWhileOn.statusCode).toBe(302);
+
+    // Flip DCR off, but keep the same store: the previously-registered client
+    // is still sitting in it, exactly like a real deployment that never
+    // deletes the row when the allowlist is emptied out.
+    delete process.env.SEERRSENSE_DCR_REDIRECT_URIS;
+    const appOff = buildServer({ fetchImpl: stubFetch as unknown as typeof fetch, store });
+    await appOff.ready();
+
+    const registerOff = await registerDcrClient(appOff, { redirect_uris: [PORTAL_CALLBACK] });
+    expect(registerOff.statusCode).toBe(404);
+
+    const authorizeWhileOff = await appOff.inject({
+      method: "GET",
+      url: "/oauth/authorize",
+      query: {
+        client_id: clientId,
+        redirect_uri: PORTAL_CALLBACK,
+        response_type: "code",
+        code_challenge: challengeFor(makeVerifier()),
+        code_challenge_method: "S256",
+      },
+    });
+    expect(authorizeWhileOff.statusCode).toBe(400);
+    expect(JSON.parse(authorizeWhileOff.payload).error).toBe("invalid_client");
+
+    await appOff.close();
+    await appOn.close();
   });
 
   it("regression for #73: a DCR client with no scope reaches request_media with seerr:read seerr:request", async () => {

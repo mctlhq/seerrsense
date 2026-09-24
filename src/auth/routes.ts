@@ -266,14 +266,26 @@ export function registerOAuthRoutes(
     config.googleRedirectUri,
     deps.fetchImpl ?? fetch,
   );
-  const clients = new ClientResolver(config.preRegisteredClients, deps.fetchImpl ?? fetch, undefined, store);
-
   // RFC 8414. registration_endpoint is present only while DCR is on: a narrow
   // RFC 7591 fallback for a client that cannot present a Client ID Metadata
   // Document (the Cloudflare MCP portal), gated by SEERRSENSE_DCR_REDIRECT_URIS
   // being non-empty. Off by default, so a self-hoster who never sets that
   // variable sees the same metadata as before.
   const dcrEnabled = config.dcrRedirectUris.length > 0;
+  // The store is only handed to the resolver while DCR is on. Otherwise a
+  // client_id minted by a *previous* /register call — still sitting in the
+  // store from before the allowlist was emptied out — would keep resolving
+  // and authorizing even though DCR is now off: the allowlist gates new
+  // registrations, but resolve() would still answer for old ones. Passing
+  // `undefined` here makes resolve() fall through to the https:// check, which
+  // a `dcr_...` client_id can never satisfy, so a stale DCR client is refused
+  // `invalid_client` at /oauth/authorize exactly like an unknown client_id.
+  const clients = new ClientResolver(
+    config.preRegisteredClients,
+    deps.fetchImpl ?? fetch,
+    undefined,
+    dcrEnabled ? store : undefined,
+  );
   const authorizationServerMetadata = {
     issuer: config.issuer,
     authorization_endpoint: `${config.issuer}/oauth/authorize`,
