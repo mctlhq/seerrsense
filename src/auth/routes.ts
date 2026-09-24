@@ -372,20 +372,59 @@ export function registerOAuthRoutes(
         if (responseTypes.some((r) => !SUPPORTED_RESPONSE_TYPES.includes(r))) {
           return oauthError(reply, 400, "invalid_client_metadata", "unsupported response_types");
         }
-        if (params.scope !== undefined) {
-          const scopeTokens = params.scope.split(/\s+/).filter(Boolean);
+        // A client that sends `scope: ""` rather than omitting the field
+        // must not pin a stored empty string: `dcr.scope ?? DCR_DEFAULT_SCOPE`
+        // in clients.ts only falls back on null/undefined, and "" is neither,
+        // so an empty string surviving to storage silently mints a
+        // zero-scope token forever. Collapse a blank scope to the same
+        // "nothing requested" case as omitting it entirely.
+        const requestedScope =
+          params.scope !== undefined && params.scope.trim().length > 0 ? params.scope : undefined;
+        if (requestedScope !== undefined) {
+          const scopeTokens = requestedScope.split(/\s+/).filter(Boolean);
           if (scopeTokens.some((s) => !SUPPORTED_SCOPES.includes(s as never))) {
             return oauthError(reply, 400, "invalid_client_metadata", "unsupported scope");
           }
         }
 
-        const clientId = `dcr_${randomToken()}`;
+        // Idempotency: this endpoint is unauthenticated and every duplicate
+        // request currently minted a brand-new client_id, uncapped and
+        // permanent. Deriving the id from the registration's own content —
+        // its redirect_uris and requested scope — means a repeated, identical
+        // registration collapses onto the same stored row instead of piling
+        // up a fresh one every time, without needing a new store query. This
+        // does not defend against varying the payload (e.g. a different
+        // client_name) to mint distinct rows; that still needs real auth or a
+        // store-level quota on the endpoint, tracked separately.
+        const registrationFingerprint = createHmac("sha256", config.signingKey)
+          .update(JSON.stringify({ redirect_uris: [...params.redirect_uris].sort(), scope: requestedScope ?? "" }))
+          .digest("hex")
+          .slice(0, 32);
+        const clientId = `dcr_${registrationFingerprint}`;
         const clientName = params.client_name ?? "Registered client";
+
+        const existing = await store.getRegisteredClient(clientId);
+        if (existing) {
+          return reply
+            .status(201)
+            .header("cache-control", "no-store")
+            .send({
+              client_id: existing.clientId,
+              client_id_issued_at: Math.floor(existing.createdAt / 1000),
+              redirect_uris: existing.redirectUris,
+              client_name: existing.clientName,
+              token_endpoint_auth_method: "none",
+              grant_types: ["authorization_code", "refresh_token"],
+              response_types: ["code"],
+              scope: existing.scope ?? DCR_DEFAULT_SCOPE,
+            });
+        }
+
         await store.putRegisteredClient({
           clientId,
           clientName,
           redirectUris: params.redirect_uris,
-          scope: params.scope,
+          scope: requestedScope,
           createdAt: Date.now(),
         });
 
@@ -400,7 +439,7 @@ export function registerOAuthRoutes(
             token_endpoint_auth_method: "none",
             grant_types: ["authorization_code", "refresh_token"],
             response_types: ["code"],
-            scope: params.scope ?? DCR_DEFAULT_SCOPE,
+            scope: requestedScope ?? DCR_DEFAULT_SCOPE,
           });
       },
     );
@@ -422,6 +461,31 @@ export function registerOAuthRoutes(
       const description =
         error instanceof ClientResolutionError ? error.message : "client_id could not be resolved";
       return oauthError(reply, 400, "invalid_client", description);
+    }
+    // Emptying SEERRSENSE_DCR_REDIRECT_URIS entirely flips dcrEnabled off,
+    // which stops the store from being wired into the resolver at all (see
+    // the comment above `clients`). Narrowing it — removing some entries
+    // while others remain — leaves dcrEnabled true, so a `dcr_...` client_id
+    // still resolves and would otherwise keep answering with the redirect_uri
+    // it registered with, even once that URI has fallen out of the current
+    // allowlist. Re-run the same allowlist check `/register` applies to a
+    // fresh registration against every DCR-sourced client on every
+    // authorize, so narrowing revokes exactly like emptying does.
+    if (client.source === "dcr") {
+      const currentDcrAllowlist: ResolvedClient = {
+        clientId: "__dcr_allowlist__",
+        clientName: "",
+        redirectUris: config.dcrRedirectUris,
+        source: "pre-registered",
+      };
+      if (!isAllowedRedirectUri(currentDcrAllowlist, params.redirect_uri)) {
+        return oauthError(
+          reply,
+          400,
+          "invalid_client",
+          "this client is no longer on the allowlist",
+        );
+      }
     }
     if (!isAllowedRedirectUri(client, params.redirect_uri)) {
       return oauthError(

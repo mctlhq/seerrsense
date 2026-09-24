@@ -1392,6 +1392,81 @@ describe("Dynamic Client Registration", () => {
     await appOn.close();
   });
 
+  it("rejects a previously-registered DCR client once its redirect_uri falls out of a narrowed allowlist, while a client on a still-allowed entry keeps working", async () => {
+    // Same gap as the emptied-out case above, but partial: dropping one entry
+    // from a multi-entry allowlist while leaving the rest must revoke access
+    // for exactly the dropped entry's client, not just the all-or-nothing
+    // empty case, and must leave a client on a surviving entry untouched.
+    const ALT_CALLBACK = "https://mcp.mctl.ai/other-callback";
+    process.env.SEERRSENSE_DCR_REDIRECT_URIS = `${PORTAL_CALLBACK},${ALT_CALLBACK}`;
+    const store = new MemoryAuthStore();
+    const appWide = buildServer({ fetchImpl: stubFetch as unknown as typeof fetch, store });
+    await appWide.ready();
+
+    const registerPortal = await registerDcrClient(appWide, { redirect_uris: [PORTAL_CALLBACK] });
+    expect(registerPortal.statusCode).toBe(201);
+    const portalClientId = JSON.parse(registerPortal.payload).client_id;
+
+    const registerAlt = await registerDcrClient(appWide, { redirect_uris: [ALT_CALLBACK] });
+    expect(registerAlt.statusCode).toBe(201);
+    const altClientId = JSON.parse(registerAlt.payload).client_id;
+
+    // Both authorize fine while the allowlist still names both URIs.
+    for (const [clientId, redirectUri] of [
+      [portalClientId, PORTAL_CALLBACK],
+      [altClientId, ALT_CALLBACK],
+    ]) {
+      const authorize = await appWide.inject({
+        method: "GET",
+        url: "/oauth/authorize",
+        query: {
+          client_id: clientId,
+          redirect_uri: redirectUri,
+          response_type: "code",
+          code_challenge: challengeFor(makeVerifier()),
+          code_challenge_method: "S256",
+        },
+      });
+      expect(authorize.statusCode, redirectUri).toBe(302);
+    }
+
+    // Narrow the allowlist down to PORTAL_CALLBACK only, but keep the same
+    // store: both previously-registered clients are still sitting in it.
+    process.env.SEERRSENSE_DCR_REDIRECT_URIS = PORTAL_CALLBACK;
+    const appNarrow = buildServer({ fetchImpl: stubFetch as unknown as typeof fetch, store });
+    await appNarrow.ready();
+
+    const authorizeAltNarrowed = await appNarrow.inject({
+      method: "GET",
+      url: "/oauth/authorize",
+      query: {
+        client_id: altClientId,
+        redirect_uri: ALT_CALLBACK,
+        response_type: "code",
+        code_challenge: challengeFor(makeVerifier()),
+        code_challenge_method: "S256",
+      },
+    });
+    expect(authorizeAltNarrowed.statusCode).toBe(400);
+    expect(JSON.parse(authorizeAltNarrowed.payload).error).toBe("invalid_client");
+
+    const authorizePortalNarrowed = await appNarrow.inject({
+      method: "GET",
+      url: "/oauth/authorize",
+      query: {
+        client_id: portalClientId,
+        redirect_uri: PORTAL_CALLBACK,
+        response_type: "code",
+        code_challenge: challengeFor(makeVerifier()),
+        code_challenge_method: "S256",
+      },
+    });
+    expect(authorizePortalNarrowed.statusCode).toBe(302);
+
+    await appNarrow.close();
+    await appWide.close();
+  });
+
   it("regression for #73: a DCR client with no scope reaches request_media with seerr:read seerr:request", async () => {
     process.env.SEERRSENSE_DCR_REDIRECT_URIS = PORTAL_CALLBACK;
     const app = await makeApp();
