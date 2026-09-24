@@ -1,5 +1,23 @@
 # Changelog
 
+## [1.11.0](https://github.com/mctlhq/seerrsense/compare/1.10.4...1.11.0) (2026-09-24)
+
+
+### Features
+
+* **agents:** issue-74-auth-dcr-fallback-restricted-to-the-clou ([7a577ce](https://github.com/mctlhq/seerrsense/commit/7a577cebdc8d0c566a713ed1850b35eddf43b951))
+* **agents:** issue-74-auth-dcr-fallback-restricted-to-the-clou ([1e15d40](https://github.com/mctlhq/seerrsense/commit/1e15d40bd44c3f3d0853ff23de7f8eb5dc2903fa))
+* **portal:** pin the seerrsense tool exposure and guard it ([6900d5a](https://github.com/mctlhq/seerrsense/commit/6900d5a023c5696a5918953f94ad822d607597ad))
+* **portal:** pin the seerrsense tool exposure and guard it ([0efe127](https://github.com/mctlhq/seerrsense/commit/0efe127a9249c50d35ded0a1802041bd95f01b56))
+
+
+### Bug Fixes
+
+* **agents:** address P1/P2 codex findings on issue-74-auth-dcr-fallback-restricted-to-the-clou ([889c94b](https://github.com/mctlhq/seerrsense/commit/889c94b8fb903a7cb38b4a1d12888adebada74a5))
+* **agents:** address P1/P2 codex findings on issue-74-auth-dcr-fallback-restricted-to-the-clou ([64aa31c](https://github.com/mctlhq/seerrsense/commit/64aa31c6f89234dbe0a4f9434a74f22bba9da8c5))
+* **agents:** address P1/P2 codex findings on issue-74-auth-dcr-fallback-restricted-to-the-clou ([a3ba6d9](https://github.com/mctlhq/seerrsense/commit/a3ba6d985d1e8d71ab7efce34bb61e01bd07bd21))
+* **agents:** address P1/P2 codex findings on issue-74-auth-dcr-fallback-restricted-to-the-clou ([74f4455](https://github.com/mctlhq/seerrsense/commit/74f4455d34eb7474ec80cf49eb27138534241457))
+
 ## [1.10.4](https://github.com/mctlhq/seerrsense/compare/1.10.3...1.10.4) (2026-09-11)
 
 
