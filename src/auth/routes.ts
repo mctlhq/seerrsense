@@ -377,11 +377,16 @@ export function registerOAuthRoutes(
         // in clients.ts only falls back on null/undefined, and "" is neither,
         // so an empty string surviving to storage silently mints a
         // zero-scope token forever. Collapse a blank scope to the same
-        // "nothing requested" case as omitting it entirely.
+        // "nothing requested" case as omitting it entirely, and canonicalize
+        // the token set (deduped, sorted, single-spaced) so two requests
+        // naming the same scopes in a different order or with incidental
+        // whitespace are the same registration, not two.
         const requestedScope =
-          params.scope !== undefined && params.scope.trim().length > 0 ? params.scope : undefined;
+          params.scope !== undefined && params.scope.trim().length > 0
+            ? [...new Set(params.scope.trim().split(/\s+/).filter(Boolean))].sort().join(" ")
+            : undefined;
         if (requestedScope !== undefined) {
-          const scopeTokens = requestedScope.split(/\s+/).filter(Boolean);
+          const scopeTokens = requestedScope.split(" ");
           if (scopeTokens.some((s) => !SUPPORTED_SCOPES.includes(s as never))) {
             return oauthError(reply, 400, "invalid_client_metadata", "unsupported scope");
           }
@@ -392,16 +397,33 @@ export function registerOAuthRoutes(
         // permanent. Deriving the id from the registration's own content —
         // its redirect_uris and requested scope — means a repeated, identical
         // registration collapses onto the same stored row instead of piling
-        // up a fresh one every time, without needing a new store query. This
-        // does not defend against varying the payload (e.g. a different
-        // client_name) to mint distinct rows; that still needs real auth or a
-        // store-level quota on the endpoint, tracked separately.
+        // up a fresh one every time, without needing a new store query. Both
+        // inputs are normalized before hashing (redirect_uris trimmed and
+        // sorted; scope already canonicalized above) so incidental variation
+        // — a trailing space on a URI, or the same scopes listed in a
+        // different order — still collapses onto the same row instead of
+        // quietly defeating the dedup.
         const registrationFingerprint = createHmac("sha256", config.signingKey)
-          .update(JSON.stringify({ redirect_uris: [...params.redirect_uris].sort(), scope: requestedScope ?? "" }))
+          .update(
+            JSON.stringify({
+              redirect_uris: [...params.redirect_uris].map((uri) => uri.trim()).sort(),
+              scope: requestedScope ?? "",
+            }),
+          )
           .digest("hex")
           .slice(0, 32);
         const clientId = `dcr_${registrationFingerprint}`;
-        const clientName = params.client_name ?? "Registered client";
+        // client_name is never taken from the request: the fingerprint above
+        // is derived purely from redirect_uris and scope, so a caller-chosen
+        // name is not part of a registration's identity. Honoring it would
+        // let any anonymous caller who knows the allowlisted redirect_uri —
+        // itself a public value, e.g. the portal's own callback URL — win
+        // the display name shown on the consent screen for that fingerprint
+        // by registering first (or racing an existing registration), and
+        // there is no per-caller authentication here to tell that apart from
+        // the legitimate client. A fixed, non-impersonatable name closes
+        // that off without adding auth or a storage quota.
+        const clientName = "Registered client";
 
         const existing = await store.getRegisteredClient(clientId);
         if (existing) {

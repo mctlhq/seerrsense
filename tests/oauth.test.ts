@@ -1566,6 +1566,71 @@ describe("Dynamic Client Registration", () => {
     await app.close();
   });
 
+  it("treats scope: \"\" the same as an omitted scope, not a permanent zero-scope registration", async () => {
+    process.env.SEERRSENSE_DCR_REDIRECT_URIS = PORTAL_CALLBACK;
+    const app = await makeApp();
+    const register = await registerDcrClient(app, { redirect_uris: [PORTAL_CALLBACK], scope: "" });
+    expect(register.statusCode).toBe(201);
+    const body = JSON.parse(register.payload);
+    expect(body.scope).toBe("seerr:read seerr:request");
+    const clientId = body.client_id;
+
+    const { token } = await runFlow(app, { clientId, redirectUri: PORTAL_CALLBACK, scope: null });
+    expect(token.statusCode).toBe(200);
+    expect(JSON.parse(token.payload).scope).toBe("seerr:read seerr:request");
+    await app.close();
+  });
+
+  it("collapses equivalent registrations (same redirect_uris, same scope set in a different order/spacing) onto one client_id", async () => {
+    process.env.SEERRSENSE_DCR_REDIRECT_URIS = PORTAL_CALLBACK;
+    const app = await makeApp();
+
+    const first = await registerDcrClient(app, {
+      redirect_uris: [PORTAL_CALLBACK],
+      scope: "seerr:request seerr:read",
+    });
+    expect(first.statusCode).toBe(201);
+    const firstBody = JSON.parse(first.payload);
+
+    const second = await registerDcrClient(app, {
+      redirect_uris: [PORTAL_CALLBACK],
+      scope: "seerr:read   seerr:request",
+    });
+    expect(second.statusCode).toBe(201);
+    const secondBody = JSON.parse(second.payload);
+
+    expect(secondBody.client_id).toBe(firstBody.client_id);
+    expect(secondBody.scope).toBe(firstBody.scope);
+    await app.close();
+  });
+
+  it("never lets a caller-supplied client_name change what an existing registration displays", async () => {
+    process.env.SEERRSENSE_DCR_REDIRECT_URIS = PORTAL_CALLBACK;
+    const app = await makeApp();
+
+    const first = await registerDcrClient(app, {
+      redirect_uris: [PORTAL_CALLBACK],
+      client_name: "Legitimate Portal",
+    });
+    expect(first.statusCode).toBe(201);
+    const firstBody = JSON.parse(first.payload);
+
+    // Same content-derived fingerprint (identical redirect_uris and scope),
+    // but a different requested client_name: this must not be able to
+    // squat or change the display name shown on the consent screen.
+    const second = await registerDcrClient(app, {
+      redirect_uris: [PORTAL_CALLBACK],
+      client_name: "Impostor",
+    });
+    expect(second.statusCode).toBe(201);
+    const secondBody = JSON.parse(second.payload);
+
+    expect(secondBody.client_id).toBe(firstBody.client_id);
+    expect(secondBody.client_name).toBe(firstBody.client_name);
+    expect(secondBody.client_name).not.toBe("Impostor");
+    await app.close();
+  });
+
   it("refuses unsupported client metadata with invalid_client_metadata, and missing/empty redirect_uris with invalid_redirect_uri", async () => {
     process.env.SEERRSENSE_DCR_REDIRECT_URIS = PORTAL_CALLBACK;
     const app = await makeApp();
