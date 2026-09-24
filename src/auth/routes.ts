@@ -398,15 +398,17 @@ export function registerOAuthRoutes(
         // its redirect_uris and requested scope — means a repeated, identical
         // registration collapses onto the same stored row instead of piling
         // up a fresh one every time, without needing a new store query. Both
-        // inputs are normalized before hashing (redirect_uris trimmed and
-        // sorted; scope already canonicalized above) so incidental variation
-        // — a trailing space on a URI, or the same scopes listed in a
-        // different order — still collapses onto the same row instead of
-        // quietly defeating the dedup.
+        // inputs are normalized before hashing (redirect_uris deduped,
+        // trimmed and sorted, mirroring how scope is canonicalized above) so
+        // incidental variation — a trailing space or a repeated entry on a
+        // redirect_uri, or the same scopes listed in a different order —
+        // still collapses onto the same row instead of quietly defeating the
+        // dedup.
+        const canonicalRedirectUris = [...new Set(params.redirect_uris.map((uri) => uri.trim()))].sort();
         const registrationFingerprint = createHmac("sha256", config.signingKey)
           .update(
             JSON.stringify({
-              redirect_uris: [...params.redirect_uris].map((uri) => uri.trim()).sort(),
+              redirect_uris: canonicalRedirectUris,
               scope: requestedScope ?? "",
             }),
           )

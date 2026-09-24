@@ -1604,30 +1604,38 @@ describe("Dynamic Client Registration", () => {
     await app.close();
   });
 
-  it("never lets a caller-supplied client_name change what an existing registration displays", async () => {
+  it("never lets a caller-supplied client_name become the permanent display name for a fingerprint", async () => {
     process.env.SEERRSENSE_DCR_REDIRECT_URIS = PORTAL_CALLBACK;
     const app = await makeApp();
 
+    // Simulates an attacker who knows the allowlisted redirect_uri (a public
+    // value) racing to register first with an impersonating client_name.
+    // Pre-fix, nothing stopped the *first* registration's client_name from
+    // being stored, so this would squat the display name for this
+    // fingerprint permanently; post-fix, client_name is never taken from the
+    // request at all, so even the very first registration cannot mint it.
     const first = await registerDcrClient(app, {
       redirect_uris: [PORTAL_CALLBACK],
-      client_name: "Legitimate Portal",
+      client_name: "Impostor",
     });
     expect(first.statusCode).toBe(201);
     const firstBody = JSON.parse(first.payload);
+    expect(firstBody.client_name).not.toBe("Impostor");
+    expect(firstBody.client_name).toBe("Registered client");
 
     // Same content-derived fingerprint (identical redirect_uris and scope),
-    // but a different requested client_name: this must not be able to
-    // squat or change the display name shown on the consent screen.
+    // but a different requested client_name: the legitimate client's later
+    // registration must not inherit a squatted name either.
     const second = await registerDcrClient(app, {
       redirect_uris: [PORTAL_CALLBACK],
-      client_name: "Impostor",
+      client_name: "Legitimate Portal",
     });
     expect(second.statusCode).toBe(201);
     const secondBody = JSON.parse(second.payload);
 
     expect(secondBody.client_id).toBe(firstBody.client_id);
     expect(secondBody.client_name).toBe(firstBody.client_name);
-    expect(secondBody.client_name).not.toBe("Impostor");
+    expect(secondBody.client_name).not.toBe("Legitimate Portal");
     await app.close();
   });
 
