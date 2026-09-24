@@ -167,6 +167,40 @@ describe("per-subject rate limiting", () => {
     delete process.env.SEERRSENSE_RATE_LIMIT_GATE_MAX;
   });
 
+  it("answers 429 on the (N+1)th POST /register from one IP", async () => {
+    // POST /register is metered with the exact same ipRateLimited(routeName)
+    // helper and { route, key: "ip" } log shape as /oauth/authorize and every
+    // other OAuth route in src/auth/routes.ts — not something this file's
+    // LOG_LEVEL=silent test run (see package.json's "test" script) lets a
+    // test observe directly, so this asserts the same behaviour those routes'
+    // own limiter tests assert: the (N+1)th request from one IP is refused.
+    const oauthEnv = {
+      SEERRSENSE_PUBLIC_URL: "https://seerrsense.test",
+      GOOGLE_OAUTH_CLIENT_ID: "google-client-id",
+      GOOGLE_OAUTH_CLIENT_SECRET: "google-client-secret",
+      SEERRSENSE_OAUTH_JWT_SIGNING_KEY: "x".repeat(48),
+      SEERRSENSE_DCR_REDIRECT_URIS: "https://mcp.mctl.ai/servers-callback",
+      SEERRSENSE_RATE_LIMIT_OAUTH_MAX: "2",
+      SEERRSENSE_RATE_LIMIT_OAUTH_WINDOW_MS: "60000",
+    };
+    Object.assign(process.env, oauthEnv);
+    const app = buildServer();
+    await app.ready();
+
+    const call = () =>
+      app.inject({
+        method: "POST",
+        url: "/register",
+        payload: { redirect_uris: ["https://mcp.mctl.ai/servers-callback"] },
+      });
+
+    expect((await call()).statusCode).toBe(201);
+    expect((await call()).statusCode).toBe(201);
+    expect((await call()).statusCode).toBe(429);
+    await app.close();
+    for (const key of Object.keys(oauthEnv)) delete process.env[key as keyof typeof oauthEnv];
+  });
+
   it("leaves health probes unlimited even after the cap is hit", async () => {
     const app = buildServer();
     await app.ready();

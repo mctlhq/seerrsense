@@ -1,5 +1,5 @@
 import pg from "pg";
-import type { AuthStore, AuthCode, PendingAuth, RefreshRecord, UserConnection } from "./store.js";
+import type { AuthStore, AuthCode, PendingAuth, RefreshRecord, RegisteredClient, UserConnection } from "./store.js";
 
 /** Arbitrary but fixed: the key two pods agree on while creating the schema. */
 const SCHEMA_LOCK_ID = 8_787_004_2;
@@ -75,6 +75,13 @@ const SCHEMA_SQL = `
         subject    TEXT   PRIMARY KEY,
         before     BIGINT NOT NULL,
         expires_at BIGINT NOT NULL
+      );
+      CREATE TABLE IF NOT EXISTS oauth_registered_clients (
+        client_id     TEXT   PRIMARY KEY,
+        client_name   TEXT   NOT NULL,
+        redirect_uris TEXT   NOT NULL,
+        scope         TEXT,
+        created_at    BIGINT NOT NULL
       );
     `;
 
@@ -279,6 +286,33 @@ export class PostgresAuthStore implements AuthStore {
 
   async deleteUserConnection(subject: string): Promise<void> {
     await this.pool.query(`DELETE FROM user_connections WHERE subject = $1`, [subject]);
+  }
+
+  async putRegisteredClient(client: RegisteredClient): Promise<void> {
+    await this.pool.query(
+      `INSERT INTO oauth_registered_clients (client_id, client_name, redirect_uris, scope, created_at)
+       VALUES ($1,$2,$3,$4,$5)
+       ON CONFLICT (client_id) DO UPDATE SET
+         client_name = EXCLUDED.client_name,
+         redirect_uris = EXCLUDED.redirect_uris,
+         scope = EXCLUDED.scope,
+         created_at = EXCLUDED.created_at`,
+      [client.clientId, client.clientName, JSON.stringify(client.redirectUris), client.scope ?? null, client.createdAt],
+    );
+  }
+
+  async getRegisteredClient(clientId: string): Promise<RegisteredClient | undefined> {
+    const { rows } = await this.pool.query(
+      `SELECT * FROM oauth_registered_clients WHERE client_id = $1`, [clientId]);
+    const row = rows[0];
+    if (!row) return undefined;
+    return {
+      clientId: row.client_id,
+      clientName: row.client_name,
+      redirectUris: JSON.parse(row.redirect_uris),
+      scope: row.scope ?? undefined,
+      createdAt: Number(row.created_at),
+    };
   }
 
   async deleteSubject(subject: string): Promise<void> {

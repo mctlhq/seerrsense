@@ -4,6 +4,7 @@ import { SignJWT, exportJWK, generateKeyPair, type CryptoKey } from "jose";
 const SIGNING_KEY = new TextEncoder().encode("x".repeat(48));
 import { createHash, randomBytes } from "node:crypto";
 import { existsSync } from "node:fs";
+import { MemoryAuthStore } from "../src/auth/store.js";
 
 // The household Seerr. Both the singleton and the factory are stubbed:
 // the server builds its default client through the factory now.
@@ -110,22 +111,33 @@ async function makeApp() {
   return app;
 }
 
-/** Drives authorize → Google callback and stops with an unredeemed code. */
-async function getAuthorizationCode(app: any, options: { scope?: string; verifier?: string } = {}) {
+/**
+ * Drives authorize → Google callback and stops with an unredeemed code.
+ * `scope: null` omits the scope parameter entirely (to exercise a client's
+ * default), where `undefined` keeps the suite's usual explicit default.
+ */
+async function getAuthorizationCode(
+  app: any,
+  options: { scope?: string | null; verifier?: string; clientId?: string; redirectUri?: string } = {},
+) {
   const verifier = options.verifier ?? makeVerifier();
+  const clientId = options.clientId ?? CLIENT_ID;
+  const redirectUri = options.redirectUri ?? REDIRECT_URI;
+  const query: Record<string, string> = {
+    client_id: clientId,
+    redirect_uri: redirectUri,
+    response_type: "code",
+    code_challenge: challengeFor(verifier),
+    code_challenge_method: "S256",
+    state: "client-state",
+    resource: RESOURCE,
+  };
+  const scope = options.scope === undefined ? "seerr:read seerr:request" : options.scope;
+  if (scope !== null) query.scope = scope;
   const authorize = await app.inject({
     method: "GET",
     url: "/oauth/authorize",
-    query: {
-      client_id: CLIENT_ID,
-      redirect_uri: REDIRECT_URI,
-      response_type: "code",
-      code_challenge: challengeFor(verifier),
-      code_challenge_method: "S256",
-      state: "client-state",
-      scope: options.scope ?? "seerr:read seerr:request",
-      resource: RESOURCE,
-    },
+    query,
   });
   expect(authorize.statusCode).toBe(302);
   const googleUrl = new URL(authorize.headers.location as string);
@@ -169,7 +181,10 @@ async function approveConsent(app: any, html: string): Promise<string> {
 }
 
 /** The whole flow, ending with the token response. */
-async function runFlow(app: any, options: { scope?: string; verifier?: string } = {}) {
+async function runFlow(
+  app: any,
+  options: { scope?: string | null; verifier?: string; clientId?: string; redirectUri?: string } = {},
+) {
   const { code, verifier, googleUrl } = await getAuthorizationCode(app, options);
   const token = await app.inject({
     method: "POST",
@@ -177,12 +192,17 @@ async function runFlow(app: any, options: { scope?: string; verifier?: string } 
     payload: {
       grant_type: "authorization_code",
       code,
-      redirect_uri: REDIRECT_URI,
-      client_id: CLIENT_ID,
+      redirect_uri: options.redirectUri ?? REDIRECT_URI,
+      client_id: options.clientId ?? CLIENT_ID,
       code_verifier: verifier,
     },
   });
   return { token, verifier, googleUrl, code };
+}
+
+/** Registers a DCR client and returns its client_id (or the raw response for a refusal case). */
+async function registerDcrClient(app: any, body: Record<string, unknown>) {
+  return app.inject({ method: "POST", url: "/register", payload: body });
 }
 
 describe("discovery documents", () => {
@@ -207,7 +227,10 @@ describe("discovery documents", () => {
       const body = JSON.parse(response.payload);
       expect(body.issuer).toBe(ISSUER);
       expect(body.code_challenge_methods_supported).toEqual(["S256"]);
-      // CIMD is the registration path; DCR is deprecated and not offered.
+      // CIMD is the registration path here; DCR is off by default (no
+      // SEERRSENSE_DCR_REDIRECT_URIS in this suite's base env), so
+      // registration_endpoint stays absent. See "Dynamic Client Registration"
+      // below for the allowlist turned on.
       expect(body.client_id_metadata_document_supported).toBe(true);
       expect(body.registration_endpoint).toBeUndefined();
       expect(body.scopes_supported).toEqual(["seerr:read", "seerr:request", "offline_access"]);
@@ -1221,5 +1244,536 @@ describe("legacy token", () => {
     });
     expect(response.statusCode).toBe(401);
     await app.close();
+  });
+});
+
+describe("Dynamic Client Registration", () => {
+  // Off by default in this suite's base env, exactly like production: every
+  // case here sets the allowlist explicitly and clears it afterward so it
+  // cannot leak into an unrelated test built afterwards.
+  const PORTAL_CALLBACK = "https://mcp.mctl.ai/servers-callback";
+
+  afterEach(() => {
+    delete process.env.SEERRSENSE_DCR_REDIRECT_URIS;
+    delete process.env.SEERRSENSE_OAUTH_CLIENTS;
+  });
+
+  it("registers a client for an allowlisted redirect_uri with no client_secret", async () => {
+    process.env.SEERRSENSE_DCR_REDIRECT_URIS = PORTAL_CALLBACK;
+    const app = await makeApp();
+    const response = await registerDcrClient(app, { redirect_uris: [PORTAL_CALLBACK] });
+    expect(response.statusCode).toBe(201);
+    const body = JSON.parse(response.payload);
+    expect(body.client_id).toBeTruthy();
+    expect(body.token_endpoint_auth_method).toBe("none");
+    expect(body.client_secret).toBeUndefined();
+    await app.close();
+  });
+
+  it("refuses a redirect_uri outside the allowlist, including a near-miss, and persists nothing", async () => {
+    process.env.SEERRSENSE_DCR_REDIRECT_URIS = PORTAL_CALLBACK;
+    const app = await makeApp();
+    for (const uri of ["https://evil.test/cb", `${PORTAL_CALLBACK}.evil.test`]) {
+      const response = await registerDcrClient(app, { redirect_uris: [uri] });
+      expect(response.statusCode, uri).toBe(400);
+      expect(JSON.parse(response.payload).error, uri).toBe("invalid_redirect_uri");
+    }
+    // A guessed id was never persisted, so authorizing against it fails
+    // invalid_client exactly like any other unknown client.
+    const authorize = await app.inject({
+      method: "GET",
+      url: "/oauth/authorize",
+      query: {
+        client_id: "dcr_guessed",
+        redirect_uri: PORTAL_CALLBACK,
+        response_type: "code",
+        code_challenge: challengeFor(makeVerifier()),
+        code_challenge_method: "S256",
+      },
+    });
+    expect(authorize.statusCode).toBe(400);
+    expect(JSON.parse(authorize.payload).error).toBe("invalid_client");
+    await app.close();
+  });
+
+  it("refuses a registration mixing one allowlisted and one non-allowlisted redirect_uri", async () => {
+    process.env.SEERRSENSE_DCR_REDIRECT_URIS = PORTAL_CALLBACK;
+    const app = await makeApp();
+    const response = await registerDcrClient(app, {
+      redirect_uris: [PORTAL_CALLBACK, "https://evil.test/cb"],
+    });
+    expect(response.statusCode).toBe(400);
+    expect(JSON.parse(response.payload).error).toBe("invalid_redirect_uri");
+    await app.close();
+  });
+
+  it("answers 404 with the allowlist unset or empty, and 201/registration_endpoint once it is set", async () => {
+    for (const value of [undefined, ""]) {
+      if (value === undefined) delete process.env.SEERRSENSE_DCR_REDIRECT_URIS;
+      else process.env.SEERRSENSE_DCR_REDIRECT_URIS = value;
+      const app = await makeApp();
+      const register = await registerDcrClient(app, { redirect_uris: [PORTAL_CALLBACK] });
+      expect(register.statusCode, JSON.stringify(value)).toBe(404);
+      for (const path of [
+        "/.well-known/oauth-authorization-server",
+        "/.well-known/oauth-authorization-server/mcp",
+      ]) {
+        const meta = await app.inject({ method: "GET", url: path });
+        expect(JSON.parse(meta.payload).registration_endpoint, path).toBeUndefined();
+      }
+      await app.close();
+    }
+
+    process.env.SEERRSENSE_DCR_REDIRECT_URIS = PORTAL_CALLBACK;
+    const app = await makeApp();
+    for (const path of [
+      "/.well-known/oauth-authorization-server",
+      "/.well-known/oauth-authorization-server/mcp",
+    ]) {
+      const meta = await app.inject({ method: "GET", url: path });
+      expect(JSON.parse(meta.payload).registration_endpoint, path).toBe(`${ISSUER}/register`);
+    }
+    await app.close();
+  });
+
+  it("rejects a previously-registered DCR client once the allowlist is emptied out, not just POST /register", async () => {
+    // A shared store across both apps: this proves the gap the "off switch"
+    // used to have. Emptying SEERRSENSE_DCR_REDIRECT_URIS closes the
+    // registration route, but a client_id minted while DCR was on still sat
+    // in the store — resolve() has to stop honoring it too, not just refuse
+    // new registrations.
+    process.env.SEERRSENSE_DCR_REDIRECT_URIS = PORTAL_CALLBACK;
+    const store = new MemoryAuthStore();
+    const appOn = buildServer({ fetchImpl: stubFetch as unknown as typeof fetch, store });
+    await appOn.ready();
+    const register = await registerDcrClient(appOn, { redirect_uris: [PORTAL_CALLBACK] });
+    expect(register.statusCode).toBe(201);
+    const clientId = JSON.parse(register.payload).client_id;
+
+    // Confirm it authorizes fine while DCR is still on, before flipping it off.
+    const authorizeWhileOn = await appOn.inject({
+      method: "GET",
+      url: "/oauth/authorize",
+      query: {
+        client_id: clientId,
+        redirect_uri: PORTAL_CALLBACK,
+        response_type: "code",
+        code_challenge: challengeFor(makeVerifier()),
+        code_challenge_method: "S256",
+      },
+    });
+    expect(authorizeWhileOn.statusCode).toBe(302);
+
+    // Flip DCR off, but keep the same store: the previously-registered client
+    // is still sitting in it, exactly like a real deployment that never
+    // deletes the row when the allowlist is emptied out.
+    delete process.env.SEERRSENSE_DCR_REDIRECT_URIS;
+    const appOff = buildServer({ fetchImpl: stubFetch as unknown as typeof fetch, store });
+    await appOff.ready();
+
+    const registerOff = await registerDcrClient(appOff, { redirect_uris: [PORTAL_CALLBACK] });
+    expect(registerOff.statusCode).toBe(404);
+
+    const authorizeWhileOff = await appOff.inject({
+      method: "GET",
+      url: "/oauth/authorize",
+      query: {
+        client_id: clientId,
+        redirect_uri: PORTAL_CALLBACK,
+        response_type: "code",
+        code_challenge: challengeFor(makeVerifier()),
+        code_challenge_method: "S256",
+      },
+    });
+    expect(authorizeWhileOff.statusCode).toBe(400);
+    expect(JSON.parse(authorizeWhileOff.payload).error).toBe("invalid_client");
+
+    await appOff.close();
+    await appOn.close();
+  });
+
+  it("rejects a previously-registered DCR client once its redirect_uri falls out of a narrowed allowlist, while a client on a still-allowed entry keeps working", async () => {
+    // Same gap as the emptied-out case above, but partial: dropping one entry
+    // from a multi-entry allowlist while leaving the rest must revoke access
+    // for exactly the dropped entry's client, not just the all-or-nothing
+    // empty case, and must leave a client on a surviving entry untouched.
+    const ALT_CALLBACK = "https://mcp.mctl.ai/other-callback";
+    process.env.SEERRSENSE_DCR_REDIRECT_URIS = `${PORTAL_CALLBACK},${ALT_CALLBACK}`;
+    const store = new MemoryAuthStore();
+    const appWide = buildServer({ fetchImpl: stubFetch as unknown as typeof fetch, store });
+    await appWide.ready();
+
+    const registerPortal = await registerDcrClient(appWide, { redirect_uris: [PORTAL_CALLBACK] });
+    expect(registerPortal.statusCode).toBe(201);
+    const portalClientId = JSON.parse(registerPortal.payload).client_id;
+
+    const registerAlt = await registerDcrClient(appWide, { redirect_uris: [ALT_CALLBACK] });
+    expect(registerAlt.statusCode).toBe(201);
+    const altClientId = JSON.parse(registerAlt.payload).client_id;
+
+    // Both authorize fine while the allowlist still names both URIs.
+    for (const [clientId, redirectUri] of [
+      [portalClientId, PORTAL_CALLBACK],
+      [altClientId, ALT_CALLBACK],
+    ]) {
+      const authorize = await appWide.inject({
+        method: "GET",
+        url: "/oauth/authorize",
+        query: {
+          client_id: clientId,
+          redirect_uri: redirectUri,
+          response_type: "code",
+          code_challenge: challengeFor(makeVerifier()),
+          code_challenge_method: "S256",
+        },
+      });
+      expect(authorize.statusCode, redirectUri).toBe(302);
+    }
+
+    // Narrow the allowlist down to PORTAL_CALLBACK only, but keep the same
+    // store: both previously-registered clients are still sitting in it.
+    process.env.SEERRSENSE_DCR_REDIRECT_URIS = PORTAL_CALLBACK;
+    const appNarrow = buildServer({ fetchImpl: stubFetch as unknown as typeof fetch, store });
+    await appNarrow.ready();
+
+    const authorizeAltNarrowed = await appNarrow.inject({
+      method: "GET",
+      url: "/oauth/authorize",
+      query: {
+        client_id: altClientId,
+        redirect_uri: ALT_CALLBACK,
+        response_type: "code",
+        code_challenge: challengeFor(makeVerifier()),
+        code_challenge_method: "S256",
+      },
+    });
+    expect(authorizeAltNarrowed.statusCode).toBe(400);
+    expect(JSON.parse(authorizeAltNarrowed.payload).error).toBe("invalid_client");
+
+    const authorizePortalNarrowed = await appNarrow.inject({
+      method: "GET",
+      url: "/oauth/authorize",
+      query: {
+        client_id: portalClientId,
+        redirect_uri: PORTAL_CALLBACK,
+        response_type: "code",
+        code_challenge: challengeFor(makeVerifier()),
+        code_challenge_method: "S256",
+      },
+    });
+    expect(authorizePortalNarrowed.statusCode).toBe(302);
+
+    await appNarrow.close();
+    await appWide.close();
+  });
+
+  it("regression for #73: a DCR client with no scope reaches request_media with seerr:read seerr:request", async () => {
+    process.env.SEERRSENSE_DCR_REDIRECT_URIS = PORTAL_CALLBACK;
+    const app = await makeApp();
+    const register = await registerDcrClient(app, { redirect_uris: [PORTAL_CALLBACK] });
+    expect(register.statusCode).toBe(201);
+    const clientId = JSON.parse(register.payload).client_id;
+
+    const { token } = await runFlow(app, { clientId, redirectUri: PORTAL_CALLBACK, scope: null });
+    expect(token.statusCode).toBe(200);
+    const body = JSON.parse(token.payload);
+    expect(body.scope).toBe("seerr:read seerr:request");
+    const claims = JSON.parse(Buffer.from(body.access_token.split(".")[1], "base64url").toString("utf8"));
+    expect(claims.scope).toBe("seerr:read seerr:request");
+
+    const call = await app.inject({
+      method: "POST",
+      url: "/mcp",
+      headers: {
+        authorization: `Bearer ${body.access_token}`,
+        "content-type": "application/json",
+        accept: "application/json, text/event-stream",
+      },
+      payload: {
+        jsonrpc: "2.0",
+        id: 1,
+        method: "tools/call",
+        params: { name: "request_media", arguments: { mediaType: "movie", tmdbId: 27205 } },
+      },
+    });
+    expect(call.statusCode).toBe(200);
+    expect(call.payload).not.toContain("not granted");
+    await app.close();
+  });
+
+  it("keeps the seerr:read default for CIMD and pre-registered clients, unaffected by the DCR default", async () => {
+    process.env.SEERRSENSE_DCR_REDIRECT_URIS = PORTAL_CALLBACK;
+    const app = await makeApp();
+
+    const { token: cimdToken } = await runFlow(app, { scope: null });
+    expect(JSON.parse(cimdToken.payload).scope).toBe("seerr:read");
+    const cimdAccessToken = JSON.parse(cimdToken.payload).access_token;
+    const cimdCall = await app.inject({
+      method: "POST",
+      url: "/mcp",
+      headers: {
+        authorization: `Bearer ${cimdAccessToken}`,
+        "content-type": "application/json",
+        accept: "application/json, text/event-stream",
+      },
+      payload: {
+        jsonrpc: "2.0",
+        id: 1,
+        method: "tools/call",
+        params: { name: "request_media", arguments: { mediaType: "movie", tmdbId: 27205 } },
+      },
+    });
+    expect(cimdCall.payload).toContain("not granted");
+    await app.close();
+
+    process.env.SEERRSENSE_OAUTH_CLIENTS = `pre-registered-client=${REDIRECT_URI}`;
+    const app2 = await makeApp();
+    const { token: preRegToken } = await runFlow(app2, { clientId: "pre-registered-client", scope: null });
+    expect(JSON.parse(preRegToken.payload).scope).toBe("seerr:read");
+    await app2.close();
+  });
+
+  it("lets an explicit scope from a DCR client override its own default", async () => {
+    process.env.SEERRSENSE_DCR_REDIRECT_URIS = PORTAL_CALLBACK;
+    const app = await makeApp();
+    const register = await registerDcrClient(app, { redirect_uris: [PORTAL_CALLBACK] });
+    const clientId = JSON.parse(register.payload).client_id;
+
+    const { token } = await runFlow(app, { clientId, redirectUri: PORTAL_CALLBACK, scope: "seerr:read" });
+    expect(JSON.parse(token.payload).scope).toBe("seerr:read");
+    await app.close();
+  });
+
+  it("makes a registered scope the client's own default, and refuses an unsupported registered scope", async () => {
+    process.env.SEERRSENSE_DCR_REDIRECT_URIS = PORTAL_CALLBACK;
+    const app = await makeApp();
+    const register = await registerDcrClient(app, {
+      redirect_uris: [PORTAL_CALLBACK],
+      scope: "seerr:read",
+    });
+    expect(register.statusCode).toBe(201);
+    const clientId = JSON.parse(register.payload).client_id;
+
+    const { token } = await runFlow(app, { clientId, redirectUri: PORTAL_CALLBACK, scope: null });
+    expect(JSON.parse(token.payload).scope).toBe("seerr:read");
+
+    const refused = await registerDcrClient(app, {
+      redirect_uris: [PORTAL_CALLBACK],
+      scope: "seerr:write",
+    });
+    expect(refused.statusCode).toBe(400);
+    expect(JSON.parse(refused.payload).error).toBe("invalid_client_metadata");
+    await app.close();
+  });
+
+  it("treats scope: \"\" the same as an omitted scope, not a permanent zero-scope registration", async () => {
+    process.env.SEERRSENSE_DCR_REDIRECT_URIS = PORTAL_CALLBACK;
+    const app = await makeApp();
+    const register = await registerDcrClient(app, { redirect_uris: [PORTAL_CALLBACK], scope: "" });
+    expect(register.statusCode).toBe(201);
+    const body = JSON.parse(register.payload);
+    expect(body.scope).toBe("seerr:read seerr:request");
+    const clientId = body.client_id;
+
+    const { token } = await runFlow(app, { clientId, redirectUri: PORTAL_CALLBACK, scope: null });
+    expect(token.statusCode).toBe(200);
+    expect(JSON.parse(token.payload).scope).toBe("seerr:read seerr:request");
+    await app.close();
+  });
+
+  it("collapses equivalent registrations (same redirect_uris, same scope set in a different order/spacing) onto one client_id", async () => {
+    process.env.SEERRSENSE_DCR_REDIRECT_URIS = PORTAL_CALLBACK;
+    const app = await makeApp();
+
+    const first = await registerDcrClient(app, {
+      redirect_uris: [PORTAL_CALLBACK],
+      scope: "seerr:request seerr:read",
+    });
+    expect(first.statusCode).toBe(201);
+    const firstBody = JSON.parse(first.payload);
+
+    const second = await registerDcrClient(app, {
+      redirect_uris: [PORTAL_CALLBACK],
+      scope: "seerr:read   seerr:request",
+    });
+    expect(second.statusCode).toBe(201);
+    const secondBody = JSON.parse(second.payload);
+
+    expect(secondBody.client_id).toBe(firstBody.client_id);
+    expect(secondBody.scope).toBe(firstBody.scope);
+    await app.close();
+  });
+
+  it("never lets a caller-supplied client_name become the permanent display name for a fingerprint", async () => {
+    process.env.SEERRSENSE_DCR_REDIRECT_URIS = PORTAL_CALLBACK;
+    const app = await makeApp();
+
+    // Simulates an attacker who knows the allowlisted redirect_uri (a public
+    // value) racing to register first with an impersonating client_name.
+    // Pre-fix, nothing stopped the *first* registration's client_name from
+    // being stored, so this would squat the display name for this
+    // fingerprint permanently; post-fix, client_name is never taken from the
+    // request at all, so even the very first registration cannot mint it.
+    const first = await registerDcrClient(app, {
+      redirect_uris: [PORTAL_CALLBACK],
+      client_name: "Impostor",
+    });
+    expect(first.statusCode).toBe(201);
+    const firstBody = JSON.parse(first.payload);
+    expect(firstBody.client_name).not.toBe("Impostor");
+    expect(firstBody.client_name).toBe("Registered client");
+
+    // Same content-derived fingerprint (identical redirect_uris and scope),
+    // but a different requested client_name: the legitimate client's later
+    // registration must not inherit a squatted name either.
+    const second = await registerDcrClient(app, {
+      redirect_uris: [PORTAL_CALLBACK],
+      client_name: "Legitimate Portal",
+    });
+    expect(second.statusCode).toBe(201);
+    const secondBody = JSON.parse(second.payload);
+
+    expect(secondBody.client_id).toBe(firstBody.client_id);
+    expect(secondBody.client_name).toBe(firstBody.client_name);
+    expect(secondBody.client_name).not.toBe("Legitimate Portal");
+    await app.close();
+  });
+
+  it("refuses unsupported client metadata with invalid_client_metadata, and missing/empty redirect_uris with invalid_redirect_uri", async () => {
+    process.env.SEERRSENSE_DCR_REDIRECT_URIS = PORTAL_CALLBACK;
+    const app = await makeApp();
+
+    const authMethod = await registerDcrClient(app, {
+      redirect_uris: [PORTAL_CALLBACK],
+      token_endpoint_auth_method: "client_secret_basic",
+    });
+    expect(authMethod.statusCode).toBe(400);
+    expect(JSON.parse(authMethod.payload).error).toBe("invalid_client_metadata");
+
+    const grantTypes = await registerDcrClient(app, {
+      redirect_uris: [PORTAL_CALLBACK],
+      grant_types: ["implicit"],
+    });
+    expect(grantTypes.statusCode).toBe(400);
+    expect(JSON.parse(grantTypes.payload).error).toBe("invalid_client_metadata");
+
+    const responseTypes = await registerDcrClient(app, {
+      redirect_uris: [PORTAL_CALLBACK],
+      response_types: ["token"],
+    });
+    expect(responseTypes.statusCode).toBe(400);
+    expect(JSON.parse(responseTypes.payload).error).toBe("invalid_client_metadata");
+
+    const emptyList = await registerDcrClient(app, { redirect_uris: [] });
+    expect(emptyList.statusCode).toBe(400);
+    expect(JSON.parse(emptyList.payload).error).toBe("invalid_redirect_uri");
+
+    const noList = await registerDcrClient(app, {});
+    expect(noList.statusCode).toBe(400);
+    expect(JSON.parse(noList.payload).error).toBe("invalid_redirect_uri");
+    await app.close();
+  });
+
+  it("shows the wider grant on the consent screen for a no-scope DCR client", async () => {
+    process.env.SEERRSENSE_DCR_REDIRECT_URIS = PORTAL_CALLBACK;
+    const app = await makeApp();
+    const register = await registerDcrClient(app, { redirect_uris: [PORTAL_CALLBACK] });
+    const clientId = JSON.parse(register.payload).client_id;
+
+    const authorize = await app.inject({
+      method: "GET",
+      url: "/oauth/authorize",
+      query: {
+        client_id: clientId,
+        redirect_uri: PORTAL_CALLBACK,
+        response_type: "code",
+        code_challenge: challengeFor(makeVerifier()),
+        code_challenge_method: "S256",
+      },
+    });
+    expect(authorize.statusCode).toBe(302);
+    const googleUrl = new URL(authorize.headers.location as string);
+    lastGoogleNonce = googleUrl.searchParams.get("nonce") ?? undefined;
+    const consent = await app.inject({
+      method: "GET",
+      url: "/oauth/google/callback",
+      query: { code: "google-code", state: googleUrl.searchParams.get("state")! },
+    });
+    expect(consent.statusCode).toBe(200);
+    expect(consent.payload).toContain("Request new films");
+    await app.close();
+  });
+
+  it("needs no bearer token, and the minted client_id is never fetched as a CIMD", async () => {
+    process.env.SEERRSENSE_DCR_REDIRECT_URIS = PORTAL_CALLBACK;
+    const fetchCalls: string[] = [];
+    const trackedFetch = async (input: any, init?: any) => {
+      const url = typeof input === "string" ? input : (input?.url ?? String(input));
+      fetchCalls.push(url);
+      return stubFetch(input, init);
+    };
+    const app = buildServer({ fetchImpl: trackedFetch as unknown as typeof fetch });
+    await app.ready();
+
+    // No Authorization header: a 201, not a 401, is what proves it reached the handler.
+    const register = await registerDcrClient(app, { redirect_uris: [PORTAL_CALLBACK] });
+    expect(register.statusCode).toBe(201);
+    const clientId = JSON.parse(register.payload).client_id;
+    expect(clientId.startsWith("https://")).toBe(false);
+
+    const authorize = await app.inject({
+      method: "GET",
+      url: "/oauth/authorize",
+      query: {
+        client_id: clientId,
+        redirect_uri: PORTAL_CALLBACK,
+        response_type: "code",
+        code_challenge: challengeFor(makeVerifier()),
+        code_challenge_method: "S256",
+      },
+    });
+    expect(authorize.statusCode).toBe(302);
+    expect(fetchCalls).not.toContain(clientId);
+    await app.close();
+  });
+});
+
+describe("client resolution", () => {
+  it("resolves a pre-registered client over a DCR row with the same client_id, and a DCR row over CIMD with no fetch", async () => {
+    const { ClientResolver } = await import("../src/auth/clients.js");
+    const fetchSpy = vi.fn();
+    const registeredStore = {
+      getRegisteredClient: vi.fn(async (clientId: string) =>
+        clientId === "shared-id"
+          ? {
+              clientId: "shared-id",
+              clientName: "DCR client",
+              redirectUris: ["https://portal.test/cb"],
+              createdAt: Date.now(),
+            }
+          : undefined,
+      ),
+    };
+    const preRegistered = [
+      {
+        clientId: "shared-id",
+        clientName: "Pre-registered",
+        redirectUris: ["https://pre.test/cb"],
+        source: "pre-registered" as const,
+      },
+    ];
+
+    // A pre-registered entry with the same id wins with no store lookup at all.
+    const withPreset = new ClientResolver(preRegistered, fetchSpy as unknown as typeof fetch, undefined, registeredStore);
+    const preset = await withPreset.resolve("shared-id");
+    expect(preset.source).toBe("pre-registered");
+    expect(fetchSpy).not.toHaveBeenCalled();
+
+    // With no pre-registered entry, the DCR row wins over ever trying CIMD.
+    const dcrOnly = new ClientResolver([], fetchSpy as unknown as typeof fetch, undefined, registeredStore);
+    const dcr = await dcrOnly.resolve("shared-id");
+    expect(dcr.source).toBe("dcr");
+    expect(dcr.defaultScope).toBe("seerr:read seerr:request");
+    expect(fetchSpy).not.toHaveBeenCalled();
   });
 });

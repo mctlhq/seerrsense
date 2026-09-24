@@ -40,6 +40,35 @@ describe("householdEmails", () => {
   });
 });
 
+describe("dcrRedirectUris", () => {
+  it("is [] when the variable is unset", () => {
+    const settings = loadAuthSettings(BASE_ENV, undefined);
+    expect(settings.oauth?.dcrRedirectUris).toEqual([]);
+  });
+
+  it("is [] when set to the empty string", () => {
+    const settings = loadAuthSettings({ ...BASE_ENV, SEERRSENSE_DCR_REDIRECT_URIS: "" }, undefined);
+    expect(settings.oauth?.dcrRedirectUris).toEqual([]);
+  });
+
+  it("is the parsed list when set", () => {
+    const settings = loadAuthSettings(
+      { ...BASE_ENV, SEERRSENSE_DCR_REDIRECT_URIS: " https://mcp.mctl.ai/servers-callback , https://other.test/cb" },
+      undefined,
+    );
+    expect(settings.oauth?.dcrRedirectUris).toEqual([
+      "https://mcp.mctl.ai/servers-callback",
+      "https://other.test/cb",
+    ]);
+  });
+
+  it("throws on a malformed entry", () => {
+    expect(() =>
+      loadAuthSettings({ ...BASE_ENV, SEERRSENSE_DCR_REDIRECT_URIS: "not a url" }, undefined),
+    ).toThrow();
+  });
+});
+
 describe("legacy token default", () => {
   it("stays on when OAuth is not configured: it is the only way in", () => {
     const settings = loadAuthSettings({}, "shared");

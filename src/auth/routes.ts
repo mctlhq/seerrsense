@@ -2,7 +2,7 @@ import { createHmac } from "node:crypto";
 import { describeError } from "../core/errors.js";
 import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 import { z } from "zod";
-import { ClientResolutionError, ClientResolver, isAllowedRedirectUri } from "./clients.js";
+import { ClientResolutionError, ClientResolver, DCR_DEFAULT_SCOPE, isAllowedRedirectUri, type ResolvedClient } from "./clients.js";
 import { SCOPE_OFFLINE, SCOPE_READ, SUPPORTED_SCOPES, type OAuthConfig } from "./config.js";
 import { hashToken, isValidPkceString, randomToken, verifyPkceS256 } from "./crypto.js";
 import { GoogleOidc } from "./google.js";
@@ -31,6 +31,23 @@ const AuthorizeQuerySchema = z.object({
   resource: z.string().max(2048).optional(),
   login_hint: z.string().max(320).optional(),
 });
+
+/**
+ * RFC 7591 registration request. Every client-controlled string bounded, the
+ * same discipline AuthorizeQuerySchema applies: this is an unauthenticated
+ * endpoint, gated only by the redirect-URI allowlist.
+ */
+const RegisterBodySchema = z.object({
+  redirect_uris: z.array(z.string().max(2048)).min(1).max(8),
+  client_name: z.string().max(256).optional(),
+  token_endpoint_auth_method: z.string().max(64).optional(),
+  grant_types: z.array(z.string().max(64)).max(8).optional(),
+  response_types: z.array(z.string().max(64)).max(8).optional(),
+  scope: z.string().max(256).optional(),
+});
+
+const SUPPORTED_GRANT_TYPES = ["authorization_code", "refresh_token"];
+const SUPPORTED_RESPONSE_TYPES = ["code"];
 
 const TokenBodySchema = z.object({
   grant_type: z.enum(["authorization_code", "refresh_token"]),
@@ -249,11 +266,26 @@ export function registerOAuthRoutes(
     config.googleRedirectUri,
     deps.fetchImpl ?? fetch,
   );
-  const clients = new ClientResolver(config.preRegisteredClients, deps.fetchImpl ?? fetch);
-
-  // RFC 8414. registration_endpoint is deliberately absent: Dynamic Client
-  // Registration is deprecated in MCP 2026-07-28 in favour of Client ID
-  // Metadata Documents, which is what the flag below advertises.
+  // RFC 8414. registration_endpoint is present only while DCR is on: a narrow
+  // RFC 7591 fallback for a client that cannot present a Client ID Metadata
+  // Document (the Cloudflare MCP portal), gated by SEERRSENSE_DCR_REDIRECT_URIS
+  // being non-empty. Off by default, so a self-hoster who never sets that
+  // variable sees the same metadata as before.
+  const dcrEnabled = config.dcrRedirectUris.length > 0;
+  // The store is only handed to the resolver while DCR is on. Otherwise a
+  // client_id minted by a *previous* /register call — still sitting in the
+  // store from before the allowlist was emptied out — would keep resolving
+  // and authorizing even though DCR is now off: the allowlist gates new
+  // registrations, but resolve() would still answer for old ones. Passing
+  // `undefined` here makes resolve() fall through to the https:// check, which
+  // a `dcr_...` client_id can never satisfy, so a stale DCR client is refused
+  // `invalid_client` at /oauth/authorize exactly like an unknown client_id.
+  const clients = new ClientResolver(
+    config.preRegisteredClients,
+    deps.fetchImpl ?? fetch,
+    undefined,
+    dcrEnabled ? store : undefined,
+  );
   const authorizationServerMetadata = {
     issuer: config.issuer,
     authorization_endpoint: `${config.issuer}/oauth/authorize`,
@@ -266,6 +298,7 @@ export function registerOAuthRoutes(
     scopes_supported: [...SUPPORTED_SCOPES],
     client_id_metadata_document_supported: true,
     authorization_response_iss_parameter_supported: true,
+    ...(dcrEnabled ? { registration_endpoint: `${config.issuer}/register` } : {}),
   };
 
   // RFC 9728. Served at both the bare path and the /mcp-suffixed one, because
@@ -296,6 +329,146 @@ export function registerOAuthRoutes(
     );
   }
 
+  // RFC 7591 §3. Registered only while dcrEnabled: with no route to match,
+  // Fastify's not-found handler answers 404, which is what makes the endpoint
+  // disappear the moment the allowlist is emptied out, with nothing left to
+  // rate-limit either.
+  if (dcrEnabled) {
+    fastify.post(
+      "/register",
+      ipRateLimited(deps.rateLimit, "/register"),
+      async (request: FastifyRequest, reply: FastifyReply) => {
+        const body = RegisterBodySchema.safeParse(request.body ?? {});
+        if (!body.success) {
+          return oauthError(reply, 400, "invalid_redirect_uri", "redirect_uris is required and must not be empty");
+        }
+        const params = body.data;
+
+        // Reuses isAllowedRedirectUri against a synthetic client built from the
+        // allowlist, so registration and authorization can never disagree on
+        // what "matches" means: no prefix or wildcard matching, userinfo
+        // refused.
+        const allowlistClient: ResolvedClient = {
+          clientId: "__dcr_allowlist__",
+          clientName: "",
+          redirectUris: config.dcrRedirectUris,
+          source: "pre-registered",
+        };
+        const disallowed = params.redirect_uris.some(
+          (uri) => !isAllowedRedirectUri(allowlistClient, uri),
+        );
+        if (disallowed) {
+          return oauthError(reply, 400, "invalid_redirect_uri", "redirect_uris must all be on the allowlist");
+        }
+
+        if (params.token_endpoint_auth_method !== undefined && params.token_endpoint_auth_method !== "none") {
+          return oauthError(reply, 400, "invalid_client_metadata", "token_endpoint_auth_method must be \"none\"");
+        }
+        const grantTypes = params.grant_types ?? ["authorization_code", "refresh_token"];
+        if (grantTypes.some((g) => !SUPPORTED_GRANT_TYPES.includes(g))) {
+          return oauthError(reply, 400, "invalid_client_metadata", "unsupported grant_types");
+        }
+        const responseTypes = params.response_types ?? ["code"];
+        if (responseTypes.some((r) => !SUPPORTED_RESPONSE_TYPES.includes(r))) {
+          return oauthError(reply, 400, "invalid_client_metadata", "unsupported response_types");
+        }
+        // A client that sends `scope: ""` rather than omitting the field
+        // must not pin a stored empty string: `dcr.scope ?? DCR_DEFAULT_SCOPE`
+        // in clients.ts only falls back on null/undefined, and "" is neither,
+        // so an empty string surviving to storage silently mints a
+        // zero-scope token forever. Collapse a blank scope to the same
+        // "nothing requested" case as omitting it entirely, and canonicalize
+        // the token set (deduped, sorted, single-spaced) so two requests
+        // naming the same scopes in a different order or with incidental
+        // whitespace are the same registration, not two.
+        const requestedScope =
+          params.scope !== undefined && params.scope.trim().length > 0
+            ? [...new Set(params.scope.trim().split(/\s+/).filter(Boolean))].sort().join(" ")
+            : undefined;
+        if (requestedScope !== undefined) {
+          const scopeTokens = requestedScope.split(" ");
+          if (scopeTokens.some((s) => !SUPPORTED_SCOPES.includes(s as never))) {
+            return oauthError(reply, 400, "invalid_client_metadata", "unsupported scope");
+          }
+        }
+
+        // Idempotency: this endpoint is unauthenticated and every duplicate
+        // request currently minted a brand-new client_id, uncapped and
+        // permanent. Deriving the id from the registration's own content —
+        // its redirect_uris and requested scope — means a repeated, identical
+        // registration collapses onto the same stored row instead of piling
+        // up a fresh one every time, without needing a new store query. Both
+        // inputs are normalized before hashing (redirect_uris deduped,
+        // trimmed and sorted, mirroring how scope is canonicalized above) so
+        // incidental variation — a trailing space or a repeated entry on a
+        // redirect_uri, or the same scopes listed in a different order —
+        // still collapses onto the same row instead of quietly defeating the
+        // dedup.
+        const canonicalRedirectUris = [...new Set(params.redirect_uris.map((uri) => uri.trim()))].sort();
+        const registrationFingerprint = createHmac("sha256", config.signingKey)
+          .update(
+            JSON.stringify({
+              redirect_uris: canonicalRedirectUris,
+              scope: requestedScope ?? "",
+            }),
+          )
+          .digest("hex")
+          .slice(0, 32);
+        const clientId = `dcr_${registrationFingerprint}`;
+        // client_name is never taken from the request: the fingerprint above
+        // is derived purely from redirect_uris and scope, so a caller-chosen
+        // name is not part of a registration's identity. Honoring it would
+        // let any anonymous caller who knows the allowlisted redirect_uri —
+        // itself a public value, e.g. the portal's own callback URL — win
+        // the display name shown on the consent screen for that fingerprint
+        // by registering first (or racing an existing registration), and
+        // there is no per-caller authentication here to tell that apart from
+        // the legitimate client. A fixed, non-impersonatable name closes
+        // that off without adding auth or a storage quota.
+        const clientName = "Registered client";
+
+        const existing = await store.getRegisteredClient(clientId);
+        if (existing) {
+          return reply
+            .status(201)
+            .header("cache-control", "no-store")
+            .send({
+              client_id: existing.clientId,
+              client_id_issued_at: Math.floor(existing.createdAt / 1000),
+              redirect_uris: existing.redirectUris,
+              client_name: existing.clientName,
+              token_endpoint_auth_method: "none",
+              grant_types: ["authorization_code", "refresh_token"],
+              response_types: ["code"],
+              scope: existing.scope ?? DCR_DEFAULT_SCOPE,
+            });
+        }
+
+        await store.putRegisteredClient({
+          clientId,
+          clientName,
+          redirectUris: params.redirect_uris,
+          scope: requestedScope,
+          createdAt: Date.now(),
+        });
+
+        return reply
+          .status(201)
+          .header("cache-control", "no-store")
+          .send({
+            client_id: clientId,
+            client_id_issued_at: Math.floor(Date.now() / 1000),
+            redirect_uris: params.redirect_uris,
+            client_name: clientName,
+            token_endpoint_auth_method: "none",
+            grant_types: ["authorization_code", "refresh_token"],
+            response_types: ["code"],
+            scope: requestedScope ?? DCR_DEFAULT_SCOPE,
+          });
+      },
+    );
+  }
+
   fastify.get("/oauth/authorize", ipRateLimited(deps.rateLimit, "/oauth/authorize"), async (request: FastifyRequest, reply: FastifyReply) => {
     const query = AuthorizeQuerySchema.safeParse(request.query);
     if (!query.success) {
@@ -313,6 +486,31 @@ export function registerOAuthRoutes(
         error instanceof ClientResolutionError ? error.message : "client_id could not be resolved";
       return oauthError(reply, 400, "invalid_client", description);
     }
+    // Emptying SEERRSENSE_DCR_REDIRECT_URIS entirely flips dcrEnabled off,
+    // which stops the store from being wired into the resolver at all (see
+    // the comment above `clients`). Narrowing it — removing some entries
+    // while others remain — leaves dcrEnabled true, so a `dcr_...` client_id
+    // still resolves and would otherwise keep answering with the redirect_uri
+    // it registered with, even once that URI has fallen out of the current
+    // allowlist. Re-run the same allowlist check `/register` applies to a
+    // fresh registration against every DCR-sourced client on every
+    // authorize, so narrowing revokes exactly like emptying does.
+    if (client.source === "dcr") {
+      const currentDcrAllowlist: ResolvedClient = {
+        clientId: "__dcr_allowlist__",
+        clientName: "",
+        redirectUris: config.dcrRedirectUris,
+        source: "pre-registered",
+      };
+      if (!isAllowedRedirectUri(currentDcrAllowlist, params.redirect_uri)) {
+        return oauthError(
+          reply,
+          400,
+          "invalid_client",
+          "this client is no longer on the allowlist",
+        );
+      }
+    }
     if (!isAllowedRedirectUri(client, params.redirect_uri)) {
       return oauthError(
         reply,
@@ -327,7 +525,7 @@ export function registerOAuthRoutes(
         `this server only issues tokens for ${config.resource}`, params.state, config.issuer);
     }
 
-    const requested = (params.scope ?? SCOPE_READ).split(/\s+/).filter(Boolean);
+    const requested = (params.scope ?? client.defaultScope ?? SCOPE_READ).split(/\s+/).filter(Boolean);
     const unknown = requested.filter((scope) => !SUPPORTED_SCOPES.includes(scope as never));
     if (unknown.length > 0) {
       return redirectError(reply, params.redirect_uri, "invalid_scope",

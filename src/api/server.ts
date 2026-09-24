@@ -40,6 +40,13 @@ const PUBLIC_PREFIXES = [
   "/readyz",
   "/.well-known/",
   "/oauth/",
+  // A client registering via POST /register has no token by definition; the
+  // route's own ipRateLimited limiter is its meter. No trailing slash, so
+  // isPublic matches it exactly and /register/anything still meets the gate.
+  // The route itself only exists (and is only advertised) while
+  // SEERRSENSE_DCR_REDIRECT_URIS is non-empty; otherwise it 404s like any
+  // other undeclared path.
+  "/register",
   "/",
   "/favicon.svg",
   "/favicon.ico",
