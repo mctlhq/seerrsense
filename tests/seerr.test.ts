@@ -195,6 +195,17 @@ describe("SeerrClient timeouts and retries", () => {
     expect(global.fetch).toHaveBeenCalledTimes(2);
   });
 
+  // A status that arrives as the timer fires is still an answer: kept, with
+  // its status, and not retried.
+  it("keeps a household error status final when the timer fires as it arrives", async () => {
+    const client = new SeerrClient({ baseUrl: "http://fake", apiKey: "key", timeoutMs: 30 });
+    (global.fetch as any).mockImplementation((_url: string, init: RequestInit) => new Promise((resolve) => {
+      init.signal!.addEventListener("abort", () => resolve({ ok: false, status: 401, statusText: "Unauthorized" }));
+    }));
+    await expect(client.search("anything")).rejects.toThrow("Seerr API error: 401 Unauthorized");
+    expect(global.fetch).toHaveBeenCalledTimes(1);
+  });
+
   it("never retries a write, even a silent one", async () => {
     const client = new SeerrClient({ baseUrl: "http://fake", apiKey: "key", timeoutMs: 30 });
     (global.fetch as any).mockImplementation((_url: string, init: RequestInit) => hang(init.signal!));

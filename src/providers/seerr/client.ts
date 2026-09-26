@@ -253,20 +253,31 @@ export class SeerrClient {
     const controller = new AbortController();
     const timeoutId = setTimeout(() => controller.abort(), this.timeoutMs);
 
+    const relabel = (error: unknown) => (timedOut(controller) ? new SeerrTimeoutError() : error);
     try {
-      const response = await fetch(url, {
-        ...options,
-        signal: controller.signal,
-        headers: this.headersFor(options.headers),
-      });
+      let response: Response;
+      try {
+        response = await fetch(url, {
+          ...options,
+          signal: controller.signal,
+          headers: this.headersFor(options.headers),
+        });
+      } catch (error) {
+        throw relabel(error);
+      }
 
+      // An answer, and its status is final even if the timer fired while it
+      // arrived: relabelled a timeout, a 401 would lose the status explain()
+      // words and become retryable.
       if (!response.ok) {
         throw new Error(`Seerr API error: ${response.status} ${response.statusText}`);
       }
 
-      return await response.json();
-    } catch (error) {
-      throw timedOut(controller) ? new SeerrTimeoutError() : error;
+      try {
+        return await response.json();
+      } catch (error) {
+        throw relabel(error);
+      }
     } finally {
       clearTimeout(timeoutId);
     }
