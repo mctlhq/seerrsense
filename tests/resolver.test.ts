@@ -227,3 +227,45 @@ test("an extractor that yields nothing produces an error, not a hang", async () 
 
   await expect(resolver.resolveMedia(query)).rejects.toThrow("Could not determine a title hint");
 });
+
+// resolve_media reads a query the way search_media does (core/query.ts). On
+// 2026-09-26 "Мошенники 2026" found nothing natively, the model handed the
+// query back and the answer came with confidence 0.35.
+test("a title with a year resolves natively, without the model", async () => {
+  const extract = vi.fn().mockRejectedValue(new Error("the model must not be asked"));
+  const raw = (id: number, title: string, date: string, mediaType = "movie", originalTitle?: string) =>
+    ({ providerId: id, provider: "tmdb", title, originalTitle, year: Number(date.slice(0, 4)), mediaType, status: "UNKNOWN" });
+  const search = vi.fn(async (term: string) =>
+    term === "Мошенники"
+      ? [
+          raw(70902, "The Frauds", "2006", "tv", "Мошенники"),
+          raw(1659823, "Scammers", "2026", "movie", "Мошенники"),
+          raw(294595, "Мошенники", "2023", "tv"),
+        ]
+      : [],
+  );
+  const resolver = new MediaResolver({ search } as any, { extract });
+
+  for (const query of ["Мошенники 2026", "Мошенники (2026)"]) {
+    const result = await resolver.resolveMedia(query);
+    expect(result.candidate.providerId).toBe(1659823);
+    expect(result.confidence).toBe(0.9);
+    expect(result.matchReason).toBe("Exact title match via native Seerr search, year 2026");
+  }
+  expect(extract).not.toHaveBeenCalled();
+});
+
+test("a year that matches no exact title is not forced onto another year", async () => {
+  const extract = vi.fn(async (): Promise<MediaIntent> => ({ titleHint: "Мошенники", titleSource: "stated" } as MediaIntent));
+  const search = vi.fn(async (term: string) =>
+    term === "Мошенники"
+      ? [{ providerId: 294595, provider: "tmdb", title: "Мошенники", year: 2023, mediaType: "tv", status: "UNKNOWN" }]
+      : [],
+  );
+  const resolver = new MediaResolver({ search } as any, { extract });
+  const result = await resolver.resolveMedia("Мошенники 2019");
+  // Not the native 0.9 path: the year contradicts the only exact title, so
+  // the model is asked and the stated year still counts against it.
+  expect(extract).toHaveBeenCalledOnce();
+  expect(result.matchReason).toContain("expected 2019");
+});

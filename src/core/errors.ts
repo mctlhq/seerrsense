@@ -13,11 +13,12 @@ export interface DescribedError {
 /**
  * Own properties worth keeping, by name, and only when they are a number or
  * a short string. `upstreamStatus` is what tells a 401 from a 502 on a
- * SeerrUnreachableError; `code`/`errno`/`syscall` name a socket failure; a
+ * SeerrUnreachableError; `upstreamOperation` names the Seerr call, as a
+ * method and path template with no query string (client.ts operationOf); `code`/`errno`/`syscall` name a socket failure; a
  * pg error's `code` is its SQLSTATE. Being an allowlist, nothing like
  * `detail`, `requestBodyValues` or `responseBody` can ride along.
  */
-const KEPT_FIELDS = ["statusCode", "upstreamStatus", "status", "code", "errno", "syscall"] as const;
+const KEPT_FIELDS = ["statusCode", "upstreamStatus", "upstreamOperation", "status", "code", "errno", "syscall"] as const;
 
 /**
  * What a failure is allowed to leave in the log: the error's class, its

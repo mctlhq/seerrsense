@@ -368,6 +368,37 @@ test("get_media and resolve_media answer within their output schemas", async () 
 
 // Anything unrecognised may carry a provider URL or an upstream body; the
 // assistant gets a generic sentence and the detail goes to the log.
+// One record per tool invocation: identifiers and outcome, never the query.
+test("every tool call leaves one mcp_tool_call record, without the person's words", async () => {
+  householdSeerr.search.mockResolvedValueOnce([]);
+  const logged: unknown[] = [];
+  const spy = vi.spyOn(app.log, "info").mockImplementation((...args: unknown[]) => {
+    logged.push(args[0]);
+  });
+  await app.inject({
+    method: "POST",
+    url: "/mcp",
+    headers: {
+      accept: "application/json, text/event-stream",
+      authorization: "Bearer secret123",
+      // A caller-supplied id is never trusted.
+      "x-seerrsense-request-id": "forged",
+    },
+    payload: { jsonrpc: "2.0", id: 21, method: "tools/call", params: { name: "search_media", arguments: { query: "that secret film 2026" } } },
+  });
+  spy.mockRestore();
+  const records = logged.filter((entry) => (entry as { event?: unknown }).event === "mcp_tool_call") as Record<string, unknown>[];
+  expect(records).toHaveLength(1);
+  const record = records[0];
+  expect(record).toMatchObject({ event: "mcp_tool_call", tool: "search_media", status: "ok" });
+  expect(record.request_id).toMatch(/^[0-9a-f-]{36}$/);
+  expect(typeof record.duration_ms).toBe("number");
+  expect(typeof record.http_request_id).toBe("string");
+  expect(record.http_request_id).not.toBe("forged");
+  expect(Object.keys(record).sort()).toEqual(["duration_ms", "event", "http_request_id", "request_id", "status", "tool"]);
+  expect(JSON.stringify(record)).not.toContain("secret film");
+});
+
 test("an unknown failure is not relayed to the caller, and the log gets its identity only", async () => {
   const failure = Object.assign(new Error("APICallError: https://api.provider.example/v1 answered 500"), {
     name: "APICallError",
@@ -394,8 +425,13 @@ test("an unknown failure is not relayed to the caller, and the log gets its iden
   // What reached the logger: name, message, stack and cause — not the
   // request body, not the response body.
   spy.mockRestore();
-  expect(logged).toHaveLength(1);
-  const line = logged[0] as { err: Record<string, unknown> };
+  // Two error lines: the failure itself, and the call's own record.
+  expect(logged).toHaveLength(2);
+  const line = logged.find((entry) => (entry as { err?: unknown }).err) as { err: Record<string, unknown>; tool: string; request_id: string };
+  expect(line.tool).toBe("search_media");
+  const record = logged.find((entry) => (entry as { event?: unknown }).event === "mcp_tool_call") as Record<string, unknown>;
+  expect(record).toMatchObject({ tool: "search_media", status: "error", error_type: "APICallError", request_id: line.request_id });
+  expect(JSON.stringify(record)).not.toContain("forgets everything");
   expect(line.err).toMatchObject({ name: "APICallError", cause: { message: "getaddrinfo ENOTFOUND api.provider.example" } });
   expect(Object.keys(line.err).sort()).toEqual(["cause", "message", "name", "stack"]);
   expect(JSON.stringify(line.err)).not.toContain("forgets everything");

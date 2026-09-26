@@ -1,5 +1,7 @@
 import { SeerrClient } from "../../providers/seerr/client.js";
 import { MediaCandidate } from "../../core/media.js";
+import { parseMediaQuery } from "../../core/query.js";
+import { searchMedia } from "../../core/search.js";
 import { IntentExtractor, MediaIntent } from "./intent.js";
 
 export type ResolutionResult = {
@@ -61,33 +63,47 @@ export class MediaResolver {
       return results;
     };
 
+    // The same reading of the query search_media uses (core/query.ts): the
+    // year comes out of the term Seerr sees and is kept as a hint. Without it
+    // "Мошенники 2026" found nothing natively and went to the model, which
+    // handed the query back (confidence 0.35 for a title that was right there).
+    const parsed = parseMediaQuery(query);
+    const title = parsed.titleQuery;
+    const yearNote = parsed.yearHint !== undefined ? `, year ${parsed.yearHint}` : "";
+    // Seerr's top candidate counts only if it IS the title, and, when the
+    // query named a year, is from that year. searchMedia has already put that
+    // year's candidates first.
+    const exactTop = (results: MediaCandidate[], wanted: string): MediaCandidate | undefined => {
+      const top = results[0];
+      if (!top) return undefined;
+      const lower = wanted.toLowerCase();
+      const named = top.title.toLowerCase() === lower || (top.originalTitle?.toLowerCase() === lower);
+      const dated = parsed.yearHint === undefined || top.year === parsed.yearHint;
+      return named && dated ? top : undefined;
+    };
+
     // 1. Native Seerr search (exact or very close match)
-    const nativeResults = await search(query);
-    if (nativeResults.length > 0) {
-      const topMatch = nativeResults[0];
-      // Basic heuristic for high confidence native match: exact title match
-      if (topMatch.title.toLowerCase() === query.toLowerCase() || (topMatch.originalTitle && topMatch.originalTitle.toLowerCase() === query.toLowerCase())) {
-        return {
-          candidate: topMatch,
-          confidence: 0.9,
-          matchReason: "Exact title match via native Seerr search"
-        };
-      }
+    const nativeResults = await searchMedia(search, query);
+    const nativeMatch = exactTop(nativeResults, title);
+    if (nativeMatch) {
+      return {
+        candidate: nativeMatch,
+        confidence: 0.9,
+        matchReason: `Exact title match via native Seerr search${yearNote}`
+      };
     }
 
-    // 2. Normalized search (strip years, punctuation, etc - simple version)
-    const normalizedQuery = query.replace(/[^\p{L}\p{N}\s]/gu, '').trim();
-    if (normalizedQuery !== query && normalizedQuery.length > 0) {
-      const normalizedResults = await search(normalizedQuery);
-      if (normalizedResults.length > 0) {
-        const topMatch = normalizedResults[0];
-        if (topMatch.title.toLowerCase() === normalizedQuery.toLowerCase() || (topMatch.originalTitle && topMatch.originalTitle.toLowerCase() === normalizedQuery.toLowerCase())) {
-          return {
-            candidate: topMatch,
-            confidence: 0.8,
-            matchReason: "Normalized title match via native Seerr search"
-          };
-        }
+    // 2. Normalized search (strip punctuation - simple version)
+    const normalizedQuery = title.replace(/[^\p{L}\p{N}\s]/gu, '').trim();
+    if (normalizedQuery !== title && normalizedQuery.length > 0) {
+      const normalizedResults = await searchMedia(search, normalizedQuery + (parsed.yearHint !== undefined ? ` (${parsed.yearHint})` : ""));
+      const normalizedMatch = exactTop(normalizedResults, normalizedQuery);
+      if (normalizedMatch) {
+        return {
+          candidate: normalizedMatch,
+          confidence: 0.8,
+          matchReason: `Normalized title match via native Seerr search${yearNote}`
+        };
       }
     }
 
@@ -96,7 +112,9 @@ export class MediaResolver {
       throw new Error("LLM_UNAVAILABLE: Native search yielded no confident results and semantic fallback is disabled.");
     }
 
-    const intent = await this.intentExtractor.extract(query);
+    const extracted = await this.intentExtractor.extract(query);
+    // A year the query stated outright outranks none the model found.
+    const intent: MediaIntent = { ...extracted, year: extracted.year ?? parsed.yearHint };
 
     // 4. Canonical lookup, best term first. similarTo is tried when titleHint
     // finds nothing, because a model that will not commit to a title often
