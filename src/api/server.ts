@@ -6,6 +6,7 @@ import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 import Fastify, { type FastifyRequest } from "fastify";
 import { createSeerrSenseMcpServer } from "../mcp/server.js";
+import { searchMedia } from "../core/search.js";
 import { describeError } from "../core/errors.js";
 import { createDefaultSeerrClient } from "../providers/seerr/client.js";
 import { notConnectedMessage, TenantResolver, type Tenant } from "../providers/seerr/tenants.js";
@@ -85,6 +86,22 @@ const SESSION_PREFIXES = ["/api/v1/account/", "/api/v1/account"];
  * are matched exactly, so /account/anything still meets the gate.
  */
 const PUBLIC_REDIRECTS = ["/account/", "/privacy/", "/terms/", "/support/"];
+
+/**
+ * Kubelet probes hit these every few seconds and are almost half of all log
+ * lines, which shrank the window a log query could reach to under an hour.
+ * They are not logged at all; a probe failure shows up as the pod's
+ * readiness, not here.
+ */
+const PROBE = { logLevel: "silent" as const };
+
+/** Carries Fastify's reqId from the /mcp route to the MCP server factory. */
+const REQUEST_ID_HEADER = "x-seerrsense-request-id";
+
+/** An MCP session id as the log may carry it: opaque and short, or not at all. */
+function loggableSessionId(value: string | null | undefined): string | undefined {
+  return value && /^[\w.-]{1,128}$/.test(value) ? value : undefined;
+}
 
 function isPublic(url: string): boolean {
   // Match on the path only: "/healthz?x=1" is the same route, and the previous
@@ -554,19 +571,19 @@ export function buildServer(
     return reply.status(404).send({ error: "not found" });
   });
 
-  fastify.get("/health", async () => {
+  fastify.get("/health", PROBE, async () => {
     return { status: "ok" };
   });
   
-  fastify.get("/healthz", async () => {
+  fastify.get("/healthz", PROBE, async () => {
     return { status: "ok" };
   });
 
-  fastify.get("/ready", async (request, reply) => {
+  fastify.get("/ready", PROBE, async (request, reply) => {
     return { status: "ready" };
   });
 
-  fastify.get("/readyz", async (request, reply) => {
+  fastify.get("/readyz", PROBE, async (request, reply) => {
     // For MCTL Kubernetes probes, we return 200 immediately. 
     // If we strictly check seerrClient.status() here and the API key is missing/dummy, 
     // the probe will fail (503) and the pod will never become ready to receive traffic.
@@ -643,7 +660,8 @@ export function buildServer(
     if (!tenant?.client) {
       return reply.status(409).send({ error: notConnectedMessage(config.SEERRSENSE_PUBLIC_URL) });
     }
-    return tenant.client.search(q.data.query);
+    const client = tenant.client;
+    return searchMedia((term) => client.search(term), q.data.query);
   });
 
   fastify.get(
@@ -697,15 +715,37 @@ export function buildServer(
   const handler = createMcpHandler(async (ctx) => {
     const tenant = await tenants.resolve(ctx.authInfo);
     const budget = authStore ? { store: authStore, options: resolveBudget } : undefined;
-    return createSeerrSenseMcpServer(ctx.authInfo?.scopes, tenant, budget, (error) =>
-      // Name, message and stack only: the raw object may carry the request
-      // it was making, and with it the person's query.
-      fastify.log.error({ err: describeError(error) }, "a tool call failed for a reason the caller was not told"),
+    // Read once per factory call, which is once per HTTP request: the SDK
+    // builds a fresh server for every request (see createMcpHandler's docs),
+    // so these ids cannot outlive the request they name. If that ever
+    // changes, these must move into the per-call record instead.
+    const headers = ctx.requestInfo?.headers;
+    return createSeerrSenseMcpServer(
+      ctx.authInfo?.scopes,
+      tenant,
+      budget,
+      (error, call) =>
+        // Name, message and stack only: the raw object may carry the request
+        // it was making, and with it the person's query.
+        fastify.log.error({ ...call, err: describeError(error) }, "a tool call failed for a reason the caller was not told"),
+      {
+        httpRequestId: headers?.get(REQUEST_ID_HEADER) ?? undefined,
+        sessionId: loggableSessionId(headers?.get("mcp-session-id")),
+        // One line per invocation. An error is logged at error level so an
+        // alert can key on it; ok and refused are the tool working.
+        onToolCall: (record) =>
+          fastify.log[record.status === "error" ? "error" : "info"](record, "mcp tool call"),
+      },
     );
   });
   const nodeHandler = toNodeHandler(handler);
 
   fastify.all("/mcp", subjectRateLimited(limits.subject, "/mcp"), async (request, reply) => {
+    // Hands Fastify's reqId to the MCP factory, which only sees a WHATWG
+    // Request built from these headers, so each tool-call line names the
+    // HTTP request it belongs to. Always overwritten: a value the caller
+    // sent is never trusted as an id.
+    request.raw.headers[REQUEST_ID_HEADER] = String(request.id);
     await nodeHandler(request.raw, reply.raw, request.body);
   });
 

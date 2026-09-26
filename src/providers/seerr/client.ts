@@ -22,6 +22,29 @@ const GUARD_MEMO_MS = 5_000;
  * upstream status only internally, for logging — never in the message a
  * caller can see, since every MCP tool relays `error.message` verbatim.
  */
+/**
+ * Which Seerr call failed, as the tool-call log may say it: the method and
+ * the path with its query string dropped and every id replaced, so
+ * "GET /api/v1/search?query=<the person's words>" is logged as
+ * "GET /api/v1/search". Attached to the error rather than logged here, so
+ * the one line per tool call carries it.
+ */
+export function operationOf(method: string, path: string): string {
+  const template = path.split("?")[0].replace(/\/\d+(?=\/|$)/g, "/:id");
+  return `${method} ${template}`;
+}
+
+function withOperation(error: unknown, method: string, path: string): unknown {
+  if (error instanceof Error && !("upstreamOperation" in error)) {
+    Object.defineProperty(error, "upstreamOperation", {
+      value: operationOf(method, path),
+      enumerable: true,
+      configurable: true,
+    });
+  }
+  return error;
+}
+
 export class SeerrUnreachableError extends Error {
   constructor(
     message = "could not reach that Seerr",
@@ -173,10 +196,14 @@ export class SeerrClient {
   private async fetch(path: string, options: RequestInit = {}) {
     const method = (options.method ?? "GET").toUpperCase();
     try {
-      return await this.fetchOnce(path, options);
+      try {
+        return await this.fetchOnce(path, options);
+      } catch (error) {
+        if (method !== "GET" || !isTransient(error)) throw error;
+        return await this.fetchOnce(path, options);
+      }
     } catch (error) {
-      if (method !== "GET" || !isTransient(error)) throw error;
-      return await this.fetchOnce(path, options);
+      throw withOperation(error, method, path);
     }
   }
 

@@ -13,6 +13,9 @@ import type { AuthStore } from "../auth/store.js";
 import { config } from "../core/config.js";
 import { SCOPE_REQUEST } from "../auth/config.js";
 import { describeError } from "../core/errors.js";
+import { searchMedia } from "../core/search.js";
+import { AsyncLocalStorage } from "node:async_hooks";
+import { randomUUID } from "node:crypto";
 
 export interface McpBudget {
   store: AuthStore;
@@ -127,6 +130,17 @@ function summariseRequest(
  * internal marker. A reviewer calling each tool expects to learn what to do
  * next, not which layer broke.
  */
+/**
+ * The HTTP status a Seerr failure carried, if any. A per-user Seerr answers
+ * through fetchUntrusted, which folds every failure into
+ * SeerrUnreachableError and keeps the status on the side; the household one
+ * throws "Seerr API error: <status> ..." from fetchTrusted.
+ */
+export function upstreamStatusOf(error: unknown): number | undefined {
+  if (error instanceof SeerrUnreachableError) return error.upstreamStatus;
+  return Number(/^Seerr API error: (\d{3})/.exec(error instanceof Error ? error.message : "")?.[1]) || undefined;
+}
+
 /** What explain() needs to know about who asked and what they called. */
 export interface ExplainContext {
   accountUrl: string;
@@ -158,10 +172,7 @@ export function explain(error: unknown, ctx: ExplainContext, log: (error: unknow
   // not always an upstream error: a refused redirect carries its 3xx, and an
   // oversized or non-JSON body carries the 2xx it came with — that is what a
   // login page or a reverse proxy at the wrong path looks like.
-  const status =
-    error instanceof SeerrUnreachableError
-      ? error.upstreamStatus
-      : Number(/^Seerr API error: (\d{3})/.exec(error instanceof Error ? error.message : "")?.[1]) || undefined;
+  const status = upstreamStatusOf(error);
   if (status === 401 || status === 403) return `${whose} rejected the API key. ${fixKey}`;
   if (status === 404) {
     return byId
@@ -199,6 +210,70 @@ export function explain(error: unknown, ctx: ExplainContext, log: (error: unknow
 }
 
 /**
+ * One line per tool invocation, for the operator. Identifiers and outcome
+ * only: never the query, the title, a TMDB payload, an e-mail or an OAuth
+ * subject -- the person's words stay out of the log.
+ */
+export interface ToolCallRecord {
+  event: "mcp_tool_call";
+  tool: string;
+  /** ok; refused (the tool answered as designed: not connected, no scope, already in Seerr, ...); error. */
+  status: "ok" | "refused" | "error";
+  duration_ms: number;
+  /** Fresh for every invocation: one HTTP request, and one MCP session, can carry several. */
+  request_id: string;
+  /** Fastify's reqId for the HTTP request, the same one on its "incoming request" line. */
+  http_request_id?: string;
+  session_id?: string;
+  error_type?: string;
+  upstream_status?: number;
+  /** Method and path template of the Seerr call that failed, never its query string. */
+  upstream_operation?: string;
+}
+
+/** The identifiers of one invocation, for a log line written during it. */
+export type ToolCallIds = Pick<ToolCallRecord, "tool" | "request_id" | "http_request_id" | "session_id">;
+
+export interface ToolCallObservation {
+  httpRequestId?: string;
+  sessionId?: string;
+  /** Called once per invocation, when it has finished, whatever the outcome. */
+  onToolCall?: (record: ToolCallRecord) => void;
+}
+
+type Outcome = Pick<ToolCallRecord, "status" | "error_type" | "upstream_status" | "upstream_operation">;
+
+/** The invocation in progress, so failed() can say how it ended without threading a context through every tool. */
+const currentCall = new AsyncLocalStorage<{ ids: ToolCallIds; outcome?: Outcome }>();
+
+function upstreamOperationOf(error: unknown): string | undefined {
+  const value = error instanceof Error ? (error as Error & { upstreamOperation?: unknown }).upstreamOperation : undefined;
+  return typeof value === "string" ? value : undefined;
+}
+
+/**
+ * How a caught error ended the call. "refused" is an answer the tool is
+ * designed to give -- a title already in Seerr, a daily resolve budget spent,
+ * an id Seerr does not know -- and not a fault; everything else is an error.
+ */
+export function classifyToolError(error: unknown, byId: boolean): Outcome {
+  const upstream_status = upstreamStatusOf(error);
+  const upstream_operation = upstreamOperationOf(error);
+  const message = error instanceof Error ? error.message : "";
+  const refused = (error_type: string): Outcome => ({ status: "refused", error_type, upstream_status, upstream_operation });
+  if (error instanceof ResolveBudgetError) return refused("ResolveBudgetError");
+  if (message.startsWith("Media is already in status: ")) return refused("AlreadyInSeerr");
+  if (message.startsWith("Semantic resolution failed")) return refused("NotResolved");
+  // A supported configuration, not a fault: without NEBIUS_API_KEY a query
+  // with no native match gets this designed answer (explain() words it).
+  if (message.startsWith("LLM_UNAVAILABLE")) return refused("ResolverUnavailable");
+  if (byId && upstream_status === 404) return refused("NotFound");
+  const name = error instanceof Error ? error.name : "NonError";
+  const error_type = name === "Error" && /^Seerr API error: /.test(message) ? "SeerrApiError" : name;
+  return { status: "error", error_type, upstream_status, upstream_operation };
+}
+
+/**
  * One MCP server for one caller.
  *
  * `scopes` is what the caller was granted; `tenant` is which Seerr they reach
@@ -212,7 +287,9 @@ export function createSeerrSenseMcpServer(
   scopes?: string[],
   tenant?: Tenant,
   budget?: McpBudget,
-  log: (error: unknown) => void = (error) => console.error("tool failed", describeError(error)),
+  log: (error: unknown, call?: ToolCallIds) => void = (error, call) =>
+    console.error(JSON.stringify({ level: "error", msg: "tool failed", ...call, err: describeError(error) })),
+  observation: ToolCallObservation = {},
 ) {
   const mcpServer = new McpServer({
     name: "SeerrSense",
@@ -222,15 +299,62 @@ export function createSeerrSenseMcpServer(
 
   const accountUrl = config.SEERRSENSE_PUBLIC_URL ? `${config.SEERRSENSE_PUBLIC_URL}/account` : "the account page";
   const client = tenant?.client;
-  const notConnected = () => ({
+  const settle = (outcome: Outcome) => {
+    const call = currentCall.getStore();
+    if (call) call.outcome = outcome;
+  };
+  const notConnected = () => (settle({ status: "refused", error_type: "NotConnected" }), {
     isError: true as const,
     content: [{ type: "text" as const, text: notConnectedMessage(config.SEERRSENSE_PUBLIC_URL) }],
   });
   const own = tenant?.source === "own";
-  const failed = (error: unknown, byId = false) => ({
-    isError: true as const,
-    content: [{ type: "text" as const, text: explain(error, { accountUrl, own, byId }, log) }],
-  });
+  const failed = (error: unknown, byId = false) => {
+    settle(classifyToolError(error, byId));
+    const ids = currentCall.getStore()?.ids;
+    return {
+      isError: true as const,
+      content: [{ type: "text" as const, text: explain(error, { accountUrl, own, byId }, (e) => log(e, ids)) }],
+    };
+  };
+
+  /**
+   * Wraps a tool so every invocation ends in exactly one ToolCallRecord. A
+   * handler that throws past its own catch is recorded as an error and the
+   * throw is left to the SDK, which answers it as an MCP error.
+   */
+  const instrument = <A extends unknown[], R extends object>(
+    tool: string,
+    handler: (...args: A) => Promise<R>,
+  ) => async (...args: A): Promise<R> => {
+    const call: { ids: ToolCallIds; outcome?: Outcome } = {
+      ids: {
+        tool,
+        request_id: randomUUID(),
+        ...(observation.httpRequestId ? { http_request_id: observation.httpRequestId } : {}),
+        ...(observation.sessionId ? { session_id: observation.sessionId } : {}),
+      },
+    };
+    const started = performance.now();
+    let result: R | undefined;
+    try {
+      result = await currentCall.run(call, () => handler(...args));
+      return result;
+    } catch (error) {
+      call.outcome = { ...classifyToolError(error, false), status: "error" };
+      throw error;
+    } finally {
+      const outcome: Outcome = call.outcome
+        ?? ((result as { isError?: unknown } | undefined)?.isError === true
+          ? { status: "error", error_type: "ToolError" }
+          : { status: "ok" });
+      observation.onToolCall?.({
+        event: "mcp_tool_call",
+        ...call.ids,
+        ...outcome,
+        duration_ms: Math.round(performance.now() - started),
+      });
+    }
+  };
   const ok = <T extends Record<string, unknown>>(structuredContent: T) => ({
     content: [{ type: "text" as const, text: JSON.stringify(structuredContent, null, 2) }],
     structuredContent,
@@ -259,13 +383,13 @@ export function createSeerrSenseMcpServer(
       outputSchema: WhoamiSchema,
       annotations: { title: "Who am I", ...READ_ONLY },
     },
-    async () =>
+    instrument("whoami", async () =>
       ok({
         subject: tenant?.subject,
         email: tenant?.email ?? "",
         source: tenant?.source ?? "none",
         connected: Boolean(client),
-      })
+      }))
   );
 
   mcpServer.registerTool("search_media",
@@ -278,15 +402,15 @@ export function createSeerrSenseMcpServer(
       outputSchema: SearchResultSchema,
       annotations: { title: "Search media", ...READ_ONLY },
     },
-    async ({ query }) => {
+    instrument("search_media", async ({ query }) => {
       try {
         if (!client) return notConnected();
-        const results = await client.search(query);
+        const results = await searchMedia((term) => client.search(term), query);
         return ok({ results: results.slice(0, 5) });
       } catch (error) {
         return failed(error);
       }
-    }
+    })
   );
 
   mcpServer.registerTool("resolve_media",
@@ -300,14 +424,14 @@ export function createSeerrSenseMcpServer(
       outputSchema: ResolutionResultSchema,
       annotations: { title: "Resolve a description to a title", ...READ_ONLY },
     },
-    async ({ query }) => {
+    instrument("resolve_media", async ({ query }) => {
       try {
         if (!mediaResolver) return notConnected();
         return ok(await mediaResolver.resolveMedia(query));
       } catch (error) {
         return failed(error);
       }
-    }
+    })
   );
 
   mcpServer.registerTool("get_media",
@@ -323,14 +447,14 @@ export function createSeerrSenseMcpServer(
       outputSchema: MediaCandidateSchema,
       annotations: { title: "Get media details", ...READ_ONLY },
     },
-    async ({ mediaType, tmdbId }) => {
+    instrument("get_media", async ({ mediaType, tmdbId }) => {
       try {
         if (!client) return notConnected();
         return ok(await client.getMedia(mediaType, tmdbId));
       } catch (error) {
         return failed(error, true);
       }
-    }
+    })
   );
 
   mcpServer.registerTool("request_media",
@@ -348,11 +472,12 @@ export function createSeerrSenseMcpServer(
       outputSchema: RequestResultSchema,
       annotations: { title: "Request media", ...WRITE },
     },
-    async (payload) => {
+    instrument("request_media", async (payload) => {
       // Reading the catalogue and asking the household to fetch something are
       // different privileges, so the write tool checks its own scope rather
       // than trusting the transport to have gated it.
       if (scopes && !scopes.includes(SCOPE_REQUEST)) {
+        settle({ status: "refused", error_type: "ScopeDenied" });
         return {
           isError: true,
           content: [{ type: "text", text: `this token is not granted the ${SCOPE_REQUEST} scope` }]
@@ -365,7 +490,7 @@ export function createSeerrSenseMcpServer(
       } catch (error) {
         return failed(error, true);
       }
-    }
+    })
   );
 
   return mcpServer;

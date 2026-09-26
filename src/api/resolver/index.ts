@@ -1,5 +1,7 @@
 import { SeerrClient } from "../../providers/seerr/client.js";
 import { MediaCandidate } from "../../core/media.js";
+import { parseMediaQuery } from "../../core/query.js";
+import { normaliseTitle, searchMedia, titled } from "../../core/search.js";
 import { IntentExtractor, MediaIntent } from "./intent.js";
 
 export type ResolutionResult = {
@@ -36,11 +38,6 @@ const REASON: Record<Provenance, string> = {
   echo: "the model returned the query instead of a title",
 };
 
-/** Case- and punctuation-insensitive, so "The Matrix!" and "the matrix" are one term. */
-function normalise(value: string): string {
-  return value.replace(/[^\p{L}\p{N}\s]/gu, " ").replace(/\s+/gu, " ").trim().toLowerCase();
-}
-
 export class MediaResolver {
   constructor(
     private seerrClient: SeerrClient,
@@ -53,7 +50,7 @@ export class MediaResolver {
     // request to Seerr cannot produce a different answer.
     const searched = new Map<string, MediaCandidate[]>();
     const search = async (term: string): Promise<MediaCandidate[]> => {
-      const key = normalise(term);
+      const key = normaliseTitle(term);
       const cached = searched.get(key);
       if (cached) return cached;
       const results = await this.seerrClient.search(term);
@@ -61,34 +58,56 @@ export class MediaResolver {
       return results;
     };
 
+    // The same reading of the query search_media uses (core/query.ts): the
+    // year comes out of the term Seerr sees and is kept as a hint. Without it
+    // "Мошенники 2026" found nothing natively and went to the model, which
+    // handed the query back (confidence 0.35 for a title that was right there).
+    const parsed = parseMediaQuery(query);
+    const title = parsed.titleQuery;
+    const yearNote = parsed.yearHint !== undefined ? `, year ${parsed.yearHint}` : "";
+    // Seerr's top candidate counts only if it IS the title and, when the
+    // query named a year, is from that year (searchMedia has already put that
+    // year's candidates first) -- unless the number was part of the title
+    // all along: for "Wonder Woman 1984" searchMedia keeps the film titled
+    // exactly that first, and its year is 2020, not 1984. `strict` is the
+    // native step's case-only comparison; the normalised step folds
+    // punctuation the way searchMedia does (normaliseTitle), so the two
+    // layers agree on what "the same title" is.
+    const same = (candidate: MediaCandidate, wanted: string, strict: boolean): boolean => {
+      if (!strict) return titled(candidate, wanted);
+      const lower = wanted.toLowerCase();
+      return candidate.title.toLowerCase() === lower || candidate.originalTitle?.toLowerCase() === lower;
+    };
+    const exactTop = (results: MediaCandidate[], wanted: string, strict: boolean): MediaCandidate | undefined => {
+      const top = results[0];
+      if (!top) return undefined;
+      if (parsed.yearWasBare && same(top, query, strict)) return top;
+      const dated = parsed.yearHint === undefined || top.year === parsed.yearHint;
+      return same(top, wanted, strict) && dated ? top : undefined;
+    };
+
     // 1. Native Seerr search (exact or very close match)
-    const nativeResults = await search(query);
-    if (nativeResults.length > 0) {
-      const topMatch = nativeResults[0];
-      // Basic heuristic for high confidence native match: exact title match
-      if (topMatch.title.toLowerCase() === query.toLowerCase() || (topMatch.originalTitle && topMatch.originalTitle.toLowerCase() === query.toLowerCase())) {
-        return {
-          candidate: topMatch,
-          confidence: 0.9,
-          matchReason: "Exact title match via native Seerr search"
-        };
-      }
+    const nativeResults = await searchMedia(search, query);
+    const nativeMatch = exactTop(nativeResults, title, true);
+    if (nativeMatch) {
+      return {
+        candidate: nativeMatch,
+        confidence: 0.9,
+        matchReason: `Exact title match via native Seerr search${yearNote}`
+      };
     }
 
-    // 2. Normalized search (strip years, punctuation, etc - simple version)
-    const normalizedQuery = query.replace(/[^\p{L}\p{N}\s]/gu, '').trim();
-    if (normalizedQuery !== query && normalizedQuery.length > 0) {
-      const normalizedResults = await search(normalizedQuery);
-      if (normalizedResults.length > 0) {
-        const topMatch = normalizedResults[0];
-        if (topMatch.title.toLowerCase() === normalizedQuery.toLowerCase() || (topMatch.originalTitle && topMatch.originalTitle.toLowerCase() === normalizedQuery.toLowerCase())) {
-          return {
-            candidate: topMatch,
-            confidence: 0.8,
-            matchReason: "Normalized title match via native Seerr search"
-          };
-        }
-      }
+    // 2. Normalized match: punctuation and case folded (normaliseTitle), over
+    // the candidates step 1 already has. No second search: searchMedia sent
+    // Seerr the title, and the normal form of it is the same cache entry, so
+    // it could not return anything new.
+    const normalizedMatch = exactTop(nativeResults, title, false);
+    if (normalizedMatch) {
+      return {
+        candidate: normalizedMatch,
+        confidence: 0.8,
+        matchReason: `Normalized title match via native Seerr search${yearNote}`
+      };
     }
 
     // 3. Fallback to Semantic Resolution (Nebius)
@@ -96,7 +115,9 @@ export class MediaResolver {
       throw new Error("LLM_UNAVAILABLE: Native search yielded no confident results and semantic fallback is disabled.");
     }
 
-    const intent = await this.intentExtractor.extract(query);
+    const extracted = await this.intentExtractor.extract(query);
+    // A year the query stated outright outranks none the model found.
+    const intent: MediaIntent = { ...extracted, year: extracted.year ?? parsed.yearHint };
 
     // 4. Canonical lookup, best term first. similarTo is tried when titleHint
     // finds nothing, because a model that will not commit to a title often
@@ -107,7 +128,10 @@ export class MediaResolver {
     }
 
     for (const { term, provenance } of terms) {
-      const results = await search(term);
+      // The model's term goes through the same reading as a person's: it
+      // writes "Ocean's Eleven 2001" as readily as anyone, and TMDB finds
+      // nothing for that.
+      const results = await searchMedia(search, term);
       if (results.length > 0) return rankCandidates(intent, results, provenance);
     }
 
@@ -127,13 +151,13 @@ function lookupTerms(intent: MediaIntent, query: string): Array<{ term: string; 
   const seen = new Set<string>();
   const add = (term: string | undefined, provenance: Provenance) => {
     if (!term) return;
-    const key = normalise(term);
+    const key = normaliseTitle(term);
     if (key === "" || seen.has(key)) return;
     seen.add(key);
     terms.push({ term, provenance });
   };
 
-  const echoesQuery = intent.titleHint !== undefined && normalise(intent.titleHint) === normalise(query);
+  const echoesQuery = intent.titleHint !== undefined && normaliseTitle(intent.titleHint) === normaliseTitle(query);
   const provenance: Provenance = echoesQuery
     ? "echo"
     : intent.titleSource === "stated"

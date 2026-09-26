@@ -90,7 +90,10 @@ test("MediaResolver routing corpus passes without invoking extractor", async () 
 
 function seerr(catalogue: Record<string, any[]>) {
   return {
-    search: vi.fn(async (query: string) => catalogue[query.toLowerCase()] ?? []),
+    // The fixtures name the TMDB id `id`; the client's candidates carry it as
+    // providerId, which searchMedia de-duplicates on.
+    search: vi.fn(async (query: string) =>
+      (catalogue[query.toLowerCase()] ?? []).map((c) => ({ providerId: c.id, ...c }))),
     getMedia: vi.fn(),
     requestMedia: vi.fn(),
     status: vi.fn(),
@@ -226,4 +229,73 @@ test("an extractor that yields nothing produces an error, not a hang", async () 
   const resolver = new MediaResolver(client as any, extractorReturning({}));
 
   await expect(resolver.resolveMedia(query)).rejects.toThrow("Could not determine a title hint");
+});
+
+// resolve_media reads a query the way search_media does (core/query.ts). On
+// 2026-09-26 "Мошенники 2026" found nothing natively, the model handed the
+// query back and the answer came with confidence 0.35.
+test("a title with a year resolves natively, without the model", async () => {
+  const extract = vi.fn().mockRejectedValue(new Error("the model must not be asked"));
+  const raw = (id: number, title: string, date: string, mediaType = "movie", originalTitle?: string) =>
+    ({ providerId: id, provider: "tmdb", title, originalTitle, year: Number(date.slice(0, 4)), mediaType, status: "UNKNOWN" });
+  const search = vi.fn(async (term: string) =>
+    term === "Мошенники"
+      ? [
+          raw(70902, "The Frauds", "2006", "tv", "Мошенники"),
+          raw(1659823, "Scammers", "2026", "movie", "Мошенники"),
+          raw(294595, "Мошенники", "2023", "tv"),
+        ]
+      : [],
+  );
+  const resolver = new MediaResolver({ search } as any, { extract });
+
+  for (const query of ["Мошенники 2026", "Мошенники (2026)"]) {
+    const result = await resolver.resolveMedia(query);
+    expect(result.candidate.providerId).toBe(1659823);
+    expect(result.confidence).toBe(0.9);
+    expect(result.matchReason).toBe("Exact title match via native Seerr search, year 2026");
+  }
+  expect(extract).not.toHaveBeenCalled();
+});
+
+test("a year that matches no exact title is not forced onto another year", async () => {
+  const extract = vi.fn(async (): Promise<MediaIntent> => ({ titleHint: "Мошенники", titleSource: "stated" } as MediaIntent));
+  const search = vi.fn(async (term: string) =>
+    term === "Мошенники"
+      ? [{ providerId: 294595, provider: "tmdb", title: "Мошенники", year: 2023, mediaType: "tv", status: "UNKNOWN" }]
+      : [],
+  );
+  const resolver = new MediaResolver({ search } as any, { extract });
+  const result = await resolver.resolveMedia("Мошенники 2019");
+  // Not the native 0.9 path: the year contradicts the only exact title, so
+  // the model is asked and the stated year still counts against it.
+  expect(extract).toHaveBeenCalledOnce();
+  expect(result.matchReason).toContain("expected 2019");
+});
+
+// A title that ends in a plausible year: searchMedia keeps the film titled
+// exactly that first, and the resolver must take it rather than demand a
+// film from 1984.
+test("a title that is a year resolves natively to that title", async () => {
+  const extract = vi.fn().mockRejectedValue(new Error("the model must not be asked"));
+  const ww84 = { providerId: 464052, provider: "tmdb", title: "Wonder Woman 1984", year: 2020, mediaType: "movie", status: "UNKNOWN" };
+  const ww = { providerId: 297762, provider: "tmdb", title: "Wonder Woman", year: 2017, mediaType: "movie", status: "UNKNOWN" };
+  const search = vi.fn(async (term: string) =>
+    term === "Wonder Woman 1984" ? [ww84] : term === "Wonder Woman" ? [ww, ww84] : [],
+  );
+  const result = await new MediaResolver({ search } as any, { extract }).resolveMedia("Wonder Woman 1984");
+  expect(result.candidate.providerId).toBe(464052);
+  expect(result.confidence).toBe(0.9);
+  expect(extract).not.toHaveBeenCalled();
+});
+
+test("the normalised step agrees with the search layer on punctuation", async () => {
+  const extract = vi.fn().mockRejectedValue(new Error("the model must not be asked"));
+  const film = { providerId: 634649, provider: "tmdb", title: "Spider-Man: No Way Home", year: 2021, mediaType: "movie", status: "UNKNOWN" };
+  const search = vi.fn(async (term: string) => (term === "Spider Man No Way Home" ? [film] : []));
+  const result = await new MediaResolver({ search } as any, { extract }).resolveMedia("Spider Man No Way Home");
+  expect(result.candidate.providerId).toBe(634649);
+  expect(result.confidence).toBe(0.8);
+  // The fold is local to the candidates step 1 found; nothing is re-searched.
+  expect(search).toHaveBeenCalledTimes(1);
 });

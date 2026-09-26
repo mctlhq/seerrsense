@@ -196,6 +196,23 @@ describe("SeerrClient timeouts and retries", () => {
     expect(global.fetch).toHaveBeenCalledTimes(1);
   });
 
+  // The tool-call log names the Seerr call that failed, as a template: no
+  // query string (the person's words) and no id.
+  it("tags a failure with the operation, never its query or ids", async () => {
+    const client = new SeerrClient({ baseUrl: "http://fake", apiKey: "key", timeoutMs: 30 });
+    (global.fetch as any).mockResolvedValue({ ok: false, status: 502, statusText: "Bad Gateway" });
+    await expect(client.getMedia("movie", 1659823)).rejects.toMatchObject({ upstreamOperation: "GET /api/v1/movie/:id" });
+    const failure = await client.search("Мошенники 2026").catch((error) => error);
+    expect(failure.upstreamOperation).toBe("GET /api/v1/search");
+    // What the log actually receives: describeError reads message and stack,
+    // which JSON.stringify of an Error would silently skip.
+    const { describeError } = await import("../src/core/errors.js");
+    const logged = JSON.stringify(describeError(failure));
+    expect(logged).toContain("GET /api/v1/search");
+    expect(logged).not.toContain("Мошенники");
+    expect(logged).not.toContain("2026");
+  });
+
   it("does not retry a read that was answered with an error", async () => {
     const client = new SeerrClient({ baseUrl: "http://fake", apiKey: "key", timeoutMs: 30 });
     (global.fetch as any).mockResolvedValue({ ok: false, status: 502, statusText: "Bad Gateway" });

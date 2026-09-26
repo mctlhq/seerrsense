@@ -368,6 +368,89 @@ test("get_media and resolve_media answer within their output schemas", async () 
 
 // Anything unrecognised may carry a provider URL or an upstream body; the
 // assistant gets a generic sentence and the detail goes to the log.
+// One record per tool invocation: identifiers and outcome, never the query.
+test("every tool call leaves one mcp_tool_call record, without the person's words", async () => {
+  householdSeerr.search.mockResolvedValueOnce([]);
+  const logged: unknown[] = [];
+  const spy = vi.spyOn(app.log, "info").mockImplementation((...args: unknown[]) => {
+    logged.push(args[0]);
+  });
+  await app.inject({
+    method: "POST",
+    url: "/mcp",
+    headers: {
+      accept: "application/json, text/event-stream",
+      authorization: "Bearer secret123",
+      // A caller-supplied id is never trusted.
+      "x-seerrsense-request-id": "forged",
+    },
+    payload: { jsonrpc: "2.0", id: 21, method: "tools/call", params: { name: "search_media", arguments: { query: "that secret film 2026" } } },
+  });
+  spy.mockRestore();
+  const records = logged.filter((entry) => (entry as { event?: unknown }).event === "mcp_tool_call") as Record<string, unknown>[];
+  expect(records).toHaveLength(1);
+  const record = records[0];
+  expect(record).toMatchObject({ event: "mcp_tool_call", tool: "search_media", status: "ok" });
+  expect(record.request_id).toMatch(/^[0-9a-f-]{36}$/);
+  expect(typeof record.duration_ms).toBe("number");
+  expect(typeof record.http_request_id).toBe("string");
+  expect(record.http_request_id).not.toBe("forged");
+  expect(Object.keys(record).sort()).toEqual(["duration_ms", "event", "http_request_id", "request_id", "status", "tool"]);
+  expect(JSON.stringify(record)).not.toContain("secret film");
+});
+
+async function toolRecords(headers: Record<string, string>, name: string, args: Record<string, unknown>) {
+  const logged: Record<string, unknown>[] = [];
+  // The level is recorded with each entry: refused vs error is the split an
+  // alert keys on, so it is asserted, not merged away.
+  const info = vi.spyOn(app.log, "info").mockImplementation((...a: unknown[]) => { logged.push({ ...(a[0] as object), _level: "info" }); });
+  const error = vi.spyOn(app.log, "error").mockImplementation((...a: unknown[]) => { logged.push({ ...(a[0] as object), _level: "error" }); });
+  await app.inject({
+    method: "POST",
+    url: "/mcp",
+    headers: { accept: "application/json, text/event-stream", authorization: "Bearer secret123", ...headers },
+    payload: { jsonrpc: "2.0", id: 31, method: "tools/call", params: { name, arguments: args } },
+  });
+  info.mockRestore();
+  error.mockRestore();
+  return logged.filter((e) => e.event === "mcp_tool_call");
+}
+
+// mcp-session-id is caller-controlled and reaches every record, so only an
+// opaque, short value is kept.
+test("a well-formed session id is logged; a malformed one is not", async () => {
+  householdSeerr.search.mockResolvedValue([]);
+  const [good] = await toolRecords({ "mcp-session-id": "sess-abc_123.x" }, "search_media", { query: "x" });
+  expect(good.session_id).toBe("sess-abc_123.x");
+  expect(good._level).toBe("info");
+  const [long] = await toolRecords({ "mcp-session-id": "a".repeat(200) }, "search_media", { query: "x" });
+  expect(long).not.toHaveProperty("session_id");
+  const [spaced] = await toolRecords({ "mcp-session-id": "has space" }, "search_media", { query: "x" });
+  expect(spaced).not.toHaveProperty("session_id");
+});
+
+// A designed answer is "refused", logged at info, and never an error.
+test("a title already in Seerr is a refused call, not an error", async () => {
+  // The client is mocked, so getMedia returns the mapped candidate directly.
+  householdSeerr.getMedia.mockResolvedValueOnce({ provider: "tmdb", providerId: 1, mediaType: "movie", title: "x", status: "AVAILABLE" });
+  const [record] = await toolRecords({}, "request_media", { mediaType: "movie", tmdbId: 1 });
+  expect(record).toMatchObject({ tool: "request_media", status: "refused", error_type: "AlreadyInSeerr", _level: "info" });
+});
+
+test("a fault is an error-level record", async () => {
+  householdSeerr.search.mockRejectedValueOnce(new Error("Seerr API error: 502 Bad Gateway"));
+  const [record] = await toolRecords({}, "search_media", { query: "x" });
+  expect(record).toMatchObject({ status: "error", error_type: "SeerrApiError", upstream_status: 502, _level: "error" });
+});
+
+test("classifyToolError: designed answers are refused, faults are errors", async () => {
+  const { classifyToolError } = await import("../src/mcp/server.js");
+  expect(classifyToolError(new Error("LLM_UNAVAILABLE: no fallback"), false)).toMatchObject({ status: "refused", error_type: "ResolverUnavailable" });
+  expect(classifyToolError(new Error("Semantic resolution failed: none"), false)).toMatchObject({ status: "refused", error_type: "NotResolved" });
+  expect(classifyToolError(new Error("Seerr API error: 404 Not Found"), true)).toMatchObject({ status: "refused", error_type: "NotFound" });
+  expect(classifyToolError(new Error("Seerr API error: 502 Bad Gateway"), false)).toMatchObject({ status: "error", error_type: "SeerrApiError", upstream_status: 502 });
+});
+
 test("an unknown failure is not relayed to the caller, and the log gets its identity only", async () => {
   const failure = Object.assign(new Error("APICallError: https://api.provider.example/v1 answered 500"), {
     name: "APICallError",
@@ -394,8 +477,13 @@ test("an unknown failure is not relayed to the caller, and the log gets its iden
   // What reached the logger: name, message, stack and cause — not the
   // request body, not the response body.
   spy.mockRestore();
-  expect(logged).toHaveLength(1);
-  const line = logged[0] as { err: Record<string, unknown> };
+  // Two error lines: the failure itself, and the call's own record.
+  expect(logged).toHaveLength(2);
+  const line = logged.find((entry) => (entry as { err?: unknown }).err) as { err: Record<string, unknown>; tool: string; request_id: string };
+  expect(line.tool).toBe("search_media");
+  const record = logged.find((entry) => (entry as { event?: unknown }).event === "mcp_tool_call") as Record<string, unknown>;
+  expect(record).toMatchObject({ tool: "search_media", status: "error", error_type: "APICallError", request_id: line.request_id });
+  expect(JSON.stringify(record)).not.toContain("forgets everything");
   expect(line.err).toMatchObject({ name: "APICallError", cause: { message: "getaddrinfo ENOTFOUND api.provider.example" } });
   expect(Object.keys(line.err).sort()).toEqual(["cause", "message", "name", "stack"]);
   expect(JSON.stringify(line.err)).not.toContain("forgets everything");
