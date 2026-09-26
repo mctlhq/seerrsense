@@ -1,5 +1,16 @@
 # Changelog
 
+## [1.11.2](https://github.com/mctlhq/seerrsense/compare/1.11.1...1.11.2) (2026-09-26)
+
+
+### Bug Fixes
+
+* **resolver:** drop the normalised re-search that was always a cache hit ([97f01e5](https://github.com/mctlhq/seerrsense/commit/97f01e50cd0ab472084009a6d7793655ac6a0922))
+* review of [#80](https://github.com/mctlhq/seerrsense/issues/80) -- a title that is a year, LLM_UNAVAILABLE, and tests that bite ([5a36927](https://github.com/mctlhq/seerrsense/commit/5a369277976652004bf72e8f9a41304a8140c0ce))
+* search year parsing, and one structured log line per MCP tool call ([212b7bd](https://github.com/mctlhq/seerrsense/commit/212b7bd5427d269556d32240c6143109b88d6438))
+* search year parsing, and one structured log line per MCP tool call ([68fab11](https://github.com/mctlhq/seerrsense/commit/68fab11092115388eab9ffcfd448a087e3e60e2d))
+* **search:** parse a trailing year in linear time; one title normaliser ([e864996](https://github.com/mctlhq/seerrsense/commit/e86499695af331d9e3199d7fe3a75dcc97fe3d1e))
+
 ## [1.11.1](https://github.com/mctlhq/seerrsense/compare/1.11.0...1.11.1) (2026-09-26)
 
 
