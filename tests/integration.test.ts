@@ -453,12 +453,16 @@ test("a fault is an error-level record", async () => {
 async function throughRealClient(respond: (init: RequestInit) => Promise<unknown>) {
   const real = new SeerrClient({ baseUrl: "http://seerr.test", apiKey: "k", timeoutMs: 20 });
   const fetchSpy = vi.spyOn(globalThis, "fetch").mockImplementation((_url, init) => respond(init ?? {}) as Promise<Response>);
-  householdSeerr.search.mockImplementationOnce((term: string) => real.search(term));
+  // Every search goes to the real client: a bare-year query makes two.
+  householdSeerr.search.mockImplementation((term: string) => real.search(term));
   try {
-    const [record] = await toolRecords({}, "search_media", { query: "Мошенники 2026" });
-    return record;
+    const records = await toolRecords({}, "search_media", { query: "Мошенники 2026" });
+    expect(records).toHaveLength(1);
+    return records[0];
   } finally {
     fetchSpy.mockRestore();
+    householdSeerr.search.mockReset();
+    householdSeerr.search.mockResolvedValue([]);
   }
 }
 

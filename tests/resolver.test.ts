@@ -302,6 +302,14 @@ test.each(["Wonder Woman  1984", " Wonder Woman 1984 "])("%j is still an exact m
   expect(result.matchReason).toMatch(/^Exact title match/);
 });
 
+test("a TMDB title with a doubled space is still an exact match", async () => {
+  const extract = vi.fn().mockRejectedValue(new Error("the model must not be asked"));
+  const film = { providerId: 1, provider: "tmdb", title: "Mission:  Impossible", year: 1996, mediaType: "movie", status: "UNKNOWN" };
+  const search = vi.fn(async () => [film]);
+  const result = await new MediaResolver({ search } as any, { extract }).resolveMedia("Mission: Impossible");
+  expect(result.confidence).toBe(0.9);
+});
+
 test("the normalised step agrees with the search layer on punctuation", async () => {
   const extract = vi.fn().mockRejectedValue(new Error("the model must not be asked"));
   const film = { providerId: 634649, provider: "tmdb", title: "Spider-Man: No Way Home", year: 2021, mediaType: "movie", status: "UNKNOWN" };

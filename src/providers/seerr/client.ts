@@ -144,18 +144,25 @@ export interface SeerrCredentials {
 
 /**
  * Whether a failure is worth one more attempt: the request never got an
- * answer at all: a timeout (SeerrTimeoutError, on either path) or, on the
- * untrusted path, any other transport failure — refused connection, reset —
- * which is folded into SeerrUnreachableError with no upstream status. An answer that *was* received (any status, a redirect, a
- * body that would not parse) is final and is not retried.
+ * answer at all. That is a timeout (SeerrTimeoutError, on either path) or,
+ * on the untrusted path, any other transport failure — refused connection,
+ * reset — folded into SeerrUnreachableError with no upstream status. An
+ * answer that *was* received (any status, a redirect, a body that would not
+ * parse) is final and is not retried.
  */
 function isTransient(error: unknown): boolean {
   return error instanceof SeerrUnreachableError && error.upstreamStatus === undefined;
 }
 
-/** Whether a failure is this request's own timer firing, on the request or on its body. */
-function timedOut(error: unknown, controller: AbortController): boolean {
-  return controller.signal.aborted && error instanceof Error && error.name === "AbortError";
+/**
+ * Whether this request's own timer fired, on the request or on its body.
+ * The signal alone decides, not the error's name: the controller is made per
+ * attempt and nothing else can abort it, while an abort mid-body can surface
+ * from undici as "TypeError: terminated" with the AbortError only under
+ * `cause`.
+ */
+function timedOut(controller: AbortController): boolean {
+  return controller.signal.aborted;
 }
 
 export class SeerrClient {
@@ -259,7 +266,7 @@ export class SeerrClient {
 
       return await response.json();
     } catch (error) {
-      throw timedOut(error, controller) ? new SeerrTimeoutError() : error;
+      throw timedOut(controller) ? new SeerrTimeoutError() : error;
     } finally {
       clearTimeout(timeoutId);
     }
@@ -287,9 +294,11 @@ export class SeerrClient {
         dispatcher,
         headers: this.headersFor(options.headers),
       });
-    } catch (error) {
+    } catch {
       clearTimeout(timeoutId);
-      throw timedOut(error, controller) ? new SeerrTimeoutError() : new SeerrUnreachableError("could not reach that Seerr");
+      throw timedOut(controller)
+        ? new SeerrTimeoutError()
+        : new SeerrUnreachableError("could not reach that Seerr");
     }
 
     // The timer stays armed until the body has been read. Clearing it here —
@@ -300,7 +309,7 @@ export class SeerrClient {
     try {
       return await this.readUntrusted(response);
     } catch (error) {
-      throw timedOut(error, controller) ? new SeerrTimeoutError() : error;
+      throw timedOut(controller) ? new SeerrTimeoutError() : error;
     } finally {
       clearTimeout(timeoutId);
     }

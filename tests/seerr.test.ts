@@ -258,6 +258,33 @@ describe("SeerrClient timeouts and retries", () => {
     await client.close();
   });
 
+  // The timer stays armed across the body read; a body that never finishes
+  // is a timeout too, whatever name undici gives the abort.
+  it("names a household body that never finishes a timeout", async () => {
+    const client = new SeerrClient({ baseUrl: "http://fake", apiKey: "key", timeoutMs: 30 });
+    (global.fetch as any).mockImplementation((_url: string, init: RequestInit) => Promise.resolve({
+      ok: true, status: 200,
+      // undici's shape for an abort mid-body: a TypeError, the AbortError under cause.
+      json: () => hang(init.signal!).catch((cause) => { throw Object.assign(new TypeError("terminated"), { cause }); }),
+    }));
+    await expect(client.search("anything")).rejects.toMatchObject({ name: "SeerrTimeoutError" });
+    expect(global.fetch).toHaveBeenCalledTimes(2);
+  });
+
+  it("names an untrusted body that never finishes a timeout", async () => {
+    const client = new SeerrClient({
+      baseUrl: "https://mine.example", apiKey: "key", untrusted: true, timeoutMs: 30,
+      lookup: async () => ["93.184.216.34"],
+    });
+    (global.fetch as any).mockImplementation((_url: string, init: RequestInit) => Promise.resolve({
+      ok: true, status: 200, headers: new Headers(),
+      body: { getReader: () => ({ read: () => hang(init.signal!), cancel: async () => {} }) },
+    }));
+    await expect(client.getMedia("movie", 1)).rejects.toMatchObject({ name: "SeerrTimeoutError" });
+    expect(global.fetch).toHaveBeenCalledTimes(2);
+    await client.close();
+  });
+
   it("keeps a transport failure that is not a timeout as unreachable", async () => {
     const client = new SeerrClient({
       baseUrl: "https://mine.example", apiKey: "key", untrusted: true, timeoutMs: 30,

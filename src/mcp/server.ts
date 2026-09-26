@@ -290,8 +290,17 @@ export function classifyToolError(error: unknown, byId: boolean): Outcome {
  * validateToolInput. It is private API: if a release renames it, the wrap is
  * skipped rather than breaking the server, and the integration test "arguments
  * the schema rejects still leave one refused record" fails, which is the cue.
- * The tool name is the registered one (unknown names are refused before
- * validation); the arguments themselves are never recorded.
+ * That cue depends on CI and the image resolving the SDK from the lockfile
+ * (`npm ci`, as both do today): the range is ^2.0.0, so a bump merged
+ * without CI could lose the record silently.
+ *
+ * The wrap is set on this instance, shadowing the prototype method, not on
+ * the prototype: every caller gets its own McpServer, and a prototype patch
+ * would carry one caller's onRejected into another's calls.
+ *
+ * The tool name is the registered one; the arguments are never recorded. A
+ * call naming a tool that does not exist is refused before validation and
+ * is not recorded: its name is whatever the caller sent.
  */
 function recordRejectedArguments(server: McpServer, onRejected: (tool: string, duration_ms: number) => void) {
   const sdk = server as unknown as {
@@ -334,6 +343,13 @@ export function createSeerrSenseMcpServer(
     version: SERVER_VERSION,
   });
 
+  const idsFor = (tool: string): ToolCallIds => ({
+    tool,
+    request_id: randomUUID(),
+    ...(observation.httpRequestId ? { http_request_id: observation.httpRequestId } : {}),
+    ...(observation.sessionId ? { session_id: observation.sessionId } : {}),
+  });
+
   recordRejectedArguments(mcpServer, (tool, duration_ms) =>
     observation.onToolCall?.({
       event: "mcp_tool_call",
@@ -363,13 +379,6 @@ export function createSeerrSenseMcpServer(
       content: [{ type: "text" as const, text: explain(error, { accountUrl, own, byId }, (e) => log(e, ids)) }],
     };
   };
-
-  const idsFor = (tool: string): ToolCallIds => ({
-    tool,
-    request_id: randomUUID(),
-    ...(observation.httpRequestId ? { http_request_id: observation.httpRequestId } : {}),
-    ...(observation.sessionId ? { session_id: observation.sessionId } : {}),
-  });
 
   /**
    * Wraps a tool so every invocation ends in exactly one ToolCallRecord. A
