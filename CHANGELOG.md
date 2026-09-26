@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.11.5](https://github.com/mctlhq/seerrsense/compare/1.11.4...1.11.5) (2026-09-26)
+
+
+### Bug Fixes
+
+* keep a household error status final; exactTop says whether it used the year ([#90](https://github.com/mctlhq/seerrsense/issues/90)) ([c5cded3](https://github.com/mctlhq/seerrsense/commit/c5cded3defa58421e45627601abbf01aa0e4b7d3))
+
 ## [1.11.4](https://github.com/mctlhq/seerrsense/compare/1.11.3...1.11.4) (2026-09-26)
 
 
