@@ -289,6 +289,19 @@ test("a title that is a year resolves natively to that title", async () => {
   expect(extract).not.toHaveBeenCalled();
 });
 
+// Chat clients produce doubled and trailing spaces; the strict step reads
+// the query the way searchMedia does, so these stay exact matches at 0.9.
+test.each(["Wonder Woman  1984", " Wonder Woman 1984 "])("%j is still an exact match", async (query) => {
+  const extract = vi.fn().mockRejectedValue(new Error("the model must not be asked"));
+  const ww84 = { providerId: 464052, provider: "tmdb", title: "Wonder Woman 1984", year: 2020, mediaType: "movie", status: "UNKNOWN" };
+  const ww = { providerId: 297762, provider: "tmdb", title: "Wonder Woman", year: 2017, mediaType: "movie", status: "UNKNOWN" };
+  const search = vi.fn(async (term: string) => (term === "Wonder Woman" ? [ww, ww84] : []));
+  const result = await new MediaResolver({ search } as any, { extract }).resolveMedia(query);
+  expect(result.candidate.providerId).toBe(464052);
+  expect(result.confidence).toBe(0.9);
+  expect(result.matchReason).toMatch(/^Exact title match/);
+});
+
 test("the normalised step agrees with the search layer on punctuation", async () => {
   const extract = vi.fn().mockRejectedValue(new Error("the model must not be asked"));
   const film = { providerId: 634649, provider: "tmdb", title: "Spider-Man: No Way Home", year: 2021, mediaType: "movie", status: "UNKNOWN" };

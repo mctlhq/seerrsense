@@ -8,7 +8,7 @@ import { MediaRequestService } from "../api/service.js";
 import { MediaResolver } from "../api/resolver/index.js";
 import { NebiusIntentExtractor } from "../api/resolver/intent.js";
 import { BudgetedIntentExtractor, ResolveBudgetError, type ResolveBudgetOptions } from "../api/resolver/budget.js";
-import { SeerrAccessChallengeError, SeerrUnreachableError } from "../providers/seerr/client.js";
+import { SeerrAccessChallengeError, SeerrTimeoutError, SeerrUnreachableError } from "../providers/seerr/client.js";
 import type { AuthStore } from "../auth/store.js";
 import { config } from "../core/config.js";
 import { SCOPE_REQUEST } from "../auth/config.js";
@@ -184,6 +184,13 @@ export function explain(error: unknown, ctx: ExplainContext, log: (error: unknow
   if (status !== undefined && status >= 400) {
     return `${whose} answered with an error (${status}). Try again in a moment.`;
   }
+  // Before the unreachable branch it specialises: a Seerr that is slow is
+  // not a wrong address, and the next attempt often succeeds.
+  if (error instanceof SeerrTimeoutError) {
+    return own
+      ? "Your Seerr did not answer in time. Try again in a moment; if it keeps happening, check that it is running."
+      : "The shared Seerr did not answer in time. Try again in a moment.";
+  }
   if (error instanceof SeerrUnreachableError) {
     return status !== undefined
       ? `${whose} answered, but not with its API (${status}). ${fixAddress}`
@@ -274,6 +281,36 @@ export function classifyToolError(error: unknown, byId: boolean): Outcome {
 }
 
 /**
+ * Records a tools/call whose arguments inputSchema rejects. The SDK validates
+ * them before any tool callback runs and answers with an isError result, so
+ * instrument() never sees the call, and it left nothing but "POST /mcp 200"
+ * in the log -- for the one failure a misbehaving client produces most.
+ *
+ * The SDK has no public hook at that point, so this wraps McpServer's own
+ * validateToolInput. It is private API: if a release renames it, the wrap is
+ * skipped rather than breaking the server, and the integration test "arguments
+ * the schema rejects still leave one refused record" fails, which is the cue.
+ * The tool name is the registered one (unknown names are refused before
+ * validation); the arguments themselves are never recorded.
+ */
+function recordRejectedArguments(server: McpServer, onRejected: (tool: string, duration_ms: number) => void) {
+  const sdk = server as unknown as {
+    validateToolInput?: (tool: unknown, args: unknown, toolName: string) => Promise<unknown>;
+  };
+  const validate = sdk.validateToolInput;
+  if (typeof validate !== "function") return;
+  sdk.validateToolInput = async (tool, args, toolName) => {
+    const started = performance.now();
+    try {
+      return await validate.call(server, tool, args, toolName);
+    } catch (error) {
+      onRejected(toolName, Math.round(performance.now() - started));
+      throw error;
+    }
+  };
+}
+
+/**
  * One MCP server for one caller.
  *
  * `scopes` is what the caller was granted; `tenant` is which Seerr they reach
@@ -297,6 +334,16 @@ export function createSeerrSenseMcpServer(
     version: SERVER_VERSION,
   });
 
+  recordRejectedArguments(mcpServer, (tool, duration_ms) =>
+    observation.onToolCall?.({
+      event: "mcp_tool_call",
+      ...idsFor(tool),
+      status: "refused",
+      error_type: "InvalidArguments",
+      duration_ms,
+    }),
+  );
+
   const accountUrl = config.SEERRSENSE_PUBLIC_URL ? `${config.SEERRSENSE_PUBLIC_URL}/account` : "the account page";
   const client = tenant?.client;
   const settle = (outcome: Outcome) => {
@@ -317,6 +364,13 @@ export function createSeerrSenseMcpServer(
     };
   };
 
+  const idsFor = (tool: string): ToolCallIds => ({
+    tool,
+    request_id: randomUUID(),
+    ...(observation.httpRequestId ? { http_request_id: observation.httpRequestId } : {}),
+    ...(observation.sessionId ? { session_id: observation.sessionId } : {}),
+  });
+
   /**
    * Wraps a tool so every invocation ends in exactly one ToolCallRecord. A
    * handler that throws past its own catch is recorded as an error and the
@@ -326,14 +380,7 @@ export function createSeerrSenseMcpServer(
     tool: string,
     handler: (...args: A) => Promise<R>,
   ) => async (...args: A): Promise<R> => {
-    const call: { ids: ToolCallIds; outcome?: Outcome } = {
-      ids: {
-        tool,
-        request_id: randomUUID(),
-        ...(observation.httpRequestId ? { http_request_id: observation.httpRequestId } : {}),
-        ...(observation.sessionId ? { session_id: observation.sessionId } : {}),
-      },
-    };
+    const call: { ids: ToolCallIds; outcome?: Outcome } = { ids: idsFor(tool) };
     const started = performance.now();
     let result: R | undefined;
     try {

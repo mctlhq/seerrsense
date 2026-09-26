@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { SeerrClient } from "../src/providers/seerr/client.js";
+import { SeerrClient, SeerrTimeoutError, SeerrUnreachableError } from "../src/providers/seerr/client.js";
 
 global.fetch = vi.fn();
 
@@ -185,14 +185,20 @@ describe("SeerrClient timeouts and retries", () => {
   it("gives up after the second silence", async () => {
     const client = new SeerrClient({ baseUrl: "http://fake", apiKey: "key", timeoutMs: 30 });
     (global.fetch as any).mockImplementation((_url: string, init: RequestInit) => hang(init.signal!));
-    await expect(client.search("anything")).rejects.toMatchObject({ name: "AbortError" });
+    // Named for what happened, so the tool-call log says "SeerrTimeoutError"
+    // on GET /api/v1/search rather than undici's bare "AbortError".
+    const failure = await client.search("anything").catch((error) => error);
+    expect(failure).toBeInstanceOf(SeerrTimeoutError);
+    expect(failure).toBeInstanceOf(SeerrUnreachableError);
+    expect(failure).toMatchObject({ name: "SeerrTimeoutError", upstreamOperation: "GET /api/v1/search" });
+    expect(failure.upstreamStatus).toBeUndefined();
     expect(global.fetch).toHaveBeenCalledTimes(2);
   });
 
   it("never retries a write, even a silent one", async () => {
     const client = new SeerrClient({ baseUrl: "http://fake", apiKey: "key", timeoutMs: 30 });
     (global.fetch as any).mockImplementation((_url: string, init: RequestInit) => hang(init.signal!));
-    await expect(client.requestMedia("movie", 1)).rejects.toMatchObject({ name: "AbortError" });
+    await expect(client.requestMedia("movie", 1)).rejects.toMatchObject({ name: "SeerrTimeoutError" });
     expect(global.fetch).toHaveBeenCalledTimes(1);
   });
 
@@ -238,6 +244,27 @@ describe("SeerrClient timeouts and retries", () => {
     const result = await client.getMedia("movie", 1);
     expect(result.status).toBe("AVAILABLE");
     expect(global.fetch).toHaveBeenCalledTimes(2);
+    await client.close();
+  });
+
+  it("names a silence on the untrusted path a timeout, not a refusal", async () => {
+    const client = new SeerrClient({
+      baseUrl: "https://mine.example", apiKey: "key", untrusted: true, timeoutMs: 30,
+      lookup: async () => ["93.184.216.34"],
+    });
+    (global.fetch as any).mockImplementation((_url: string, init: RequestInit) => hang(init.signal!));
+    await expect(client.getMedia("movie", 1)).rejects.toMatchObject({ name: "SeerrTimeoutError" });
+    expect(global.fetch).toHaveBeenCalledTimes(2);
+    await client.close();
+  });
+
+  it("keeps a transport failure that is not a timeout as unreachable", async () => {
+    const client = new SeerrClient({
+      baseUrl: "https://mine.example", apiKey: "key", untrusted: true, timeoutMs: 30,
+      lookup: async () => ["93.184.216.34"],
+    });
+    (global.fetch as any).mockRejectedValue(new TypeError("fetch failed"));
+    await expect(client.getMedia("movie", 1)).rejects.toMatchObject({ name: "SeerrUnreachableError" });
     await client.close();
   });
 

@@ -32,7 +32,11 @@ export async function searchMedia(search: SearchTerm, query: string): Promise<Me
   const parsed = parseMediaQuery(query);
   if (parsed.titleQuery === "") return [];
 
-  const terms = parsed.yearWasBare ? [query, parsed.titleQuery] : [parsed.titleQuery];
+  // The title's own results lead the merge: TMDB's search is fuzzy and
+  // answers a term with a number in it with *something* often enough, and
+  // that something must not outrank, within the year, what the title found.
+  // The whole-query candidate is hoisted below regardless of where it lands.
+  const terms = parsed.yearWasBare ? [parsed.titleQuery, query] : [parsed.titleQuery];
   const lists = await Promise.all(terms.map((term) => search(term)));
 
   const seen = new Set<string>();

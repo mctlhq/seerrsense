@@ -75,7 +75,9 @@ export class MediaResolver {
     // layers agree on what "the same title" is.
     const same = (candidate: MediaCandidate, wanted: string, strict: boolean): boolean => {
       if (!strict) return titled(candidate, wanted);
-      const lower = wanted.toLowerCase();
+      // Whitespace collapsed as searchMedia's titled() does, so "Wonder Woman  1984"
+      // (a doubled space, which chat clients produce) is still an exact match.
+      const lower = wanted.replace(/\s+/gu, " ").trim().toLowerCase();
       return candidate.title.toLowerCase() === lower || candidate.originalTitle?.toLowerCase() === lower;
     };
     const exactTop = (results: MediaCandidate[], wanted: string, strict: boolean): MediaCandidate | undefined => {

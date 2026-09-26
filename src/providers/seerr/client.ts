@@ -55,6 +55,19 @@ export class SeerrUnreachableError extends Error {
   }
 }
 
+/**
+ * Seerr gave no answer within SEERR_REQUEST_TIMEOUT_MS. A kind of
+ * unreachable, so every caller that handles SeerrUnreachableError handles
+ * this too; its own name is what the tool-call log reports, instead of
+ * undici's bare "AbortError", which says nothing about what was waited on.
+ */
+export class SeerrTimeoutError extends SeerrUnreachableError {
+  constructor(message = "that Seerr did not answer in time") {
+    super(message);
+    this.name = "SeerrTimeoutError";
+  }
+}
+
 /** Raised when a dial to an untrusted Seerr is answered by Cloudflare Access. */
 export class SeerrAccessChallengeError extends Error {
   constructor(message = "that address is behind Cloudflare Access") {
@@ -131,15 +144,18 @@ export interface SeerrCredentials {
 
 /**
  * Whether a failure is worth one more attempt: the request never got an
- * answer at all. A timeout on the household path surfaces as undici's
- * AbortError; on the untrusted path every transport failure — timeout,
- * refused connection, reset — is folded into SeerrUnreachableError with no
- * upstream status. An answer that *was* received (any status, a redirect, a
+ * answer at all: a timeout (SeerrTimeoutError, on either path) or, on the
+ * untrusted path, any other transport failure — refused connection, reset —
+ * which is folded into SeerrUnreachableError with no upstream status. An answer that *was* received (any status, a redirect, a
  * body that would not parse) is final and is not retried.
  */
 function isTransient(error: unknown): boolean {
-  if (error instanceof SeerrUnreachableError) return error.upstreamStatus === undefined;
-  return error instanceof Error && error.name === "AbortError";
+  return error instanceof SeerrUnreachableError && error.upstreamStatus === undefined;
+}
+
+/** Whether a failure is this request's own timer firing, on the request or on its body. */
+function timedOut(error: unknown, controller: AbortController): boolean {
+  return controller.signal.aborted && error instanceof Error && error.name === "AbortError";
 }
 
 export class SeerrClient {
@@ -242,6 +258,8 @@ export class SeerrClient {
       }
 
       return await response.json();
+    } catch (error) {
+      throw timedOut(error, controller) ? new SeerrTimeoutError() : error;
     } finally {
       clearTimeout(timeoutId);
     }
@@ -271,7 +289,7 @@ export class SeerrClient {
       });
     } catch (error) {
       clearTimeout(timeoutId);
-      throw new SeerrUnreachableError("could not reach that Seerr");
+      throw timedOut(error, controller) ? new SeerrTimeoutError() : new SeerrUnreachableError("could not reach that Seerr");
     }
 
     // The timer stays armed until the body has been read. Clearing it here —
@@ -281,6 +299,8 @@ export class SeerrClient {
     // `untrusted: true` that host was chosen by the person, not by us.
     try {
       return await this.readUntrusted(response);
+    } catch (error) {
+      throw timedOut(error, controller) ? new SeerrTimeoutError() : error;
     } finally {
       clearTimeout(timeoutId);
     }
