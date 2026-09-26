@@ -114,6 +114,14 @@ describe("searchMedia", () => {
     expect(results.map((r) => r.providerId)).toEqual([464052, 9999, 297762]);
   });
 
+  test("within the year, what the title found outranks what the query as written found", async () => {
+    // TMDB is fuzzy: a term with a number in it can still match something.
+    const stray = candidate(4242, "Moshennik", 2026);
+    const search = seerr({ "Мошенники 2026": [stray], "Мошенники": [FRAUDS, SCAMMERS, SERIES] });
+    const results = await searchMedia(search, "Мошенники 2026");
+    expect(results.map((r) => r.providerId)).toEqual([1659823, 4242, 70902, 294595]);
+  });
+
   test("nothing is dropped and nothing is duplicated", async () => {
     const search = seerr({ "Scammers 2026": [SCAMMERS], "Scammers": [SCAMMERS, FRAUDS] });
     expect((await searchMedia(search, "Scammers 2026")).map((r) => r.providerId)).toEqual([1659823, 70902]);

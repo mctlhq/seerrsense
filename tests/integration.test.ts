@@ -2,7 +2,7 @@ import { test, expect, beforeAll } from "vitest";
 import { readFileSync } from "node:fs";
 import Fastify from "fastify";
 import { buildServer } from "../src/api/server.js";
-import { seerrClient, SeerrAccessChallengeError, SeerrUnreachableError } from "../src/providers/seerr/client.js";
+import { seerrClient, SeerrAccessChallengeError, SeerrClient, SeerrTimeoutError, SeerrUnreachableError } from "../src/providers/seerr/client.js";
 
 // Mock the network calls
 import { vi } from "vitest";
@@ -338,6 +338,9 @@ test("explain() sends an attached user to /account and a household user to the o
   expect(explain(new SeerrUnreachableError("x"), own, quiet)).toMatch(/could not reach your Seerr.*https:\/\/s.test\/account/);
   expect(explain(new SeerrUnreachableError("x", 404), household, quiet)).toMatch(/^The shared Seerr answered 404.*operator/);
   expect(explain(new SeerrAccessChallengeError(), own, quiet)).toMatch(/service token on https:\/\/s.test\/account/);
+  // A slow Seerr is not a wrong address: no pointer to /account's address field.
+  expect(explain(new SeerrTimeoutError(), own, quiet)).toMatch(/^Your Seerr did not answer in time\..*check that it is running/);
+  expect(explain(new SeerrTimeoutError(), household, quiet)).toBe("The shared Seerr did not answer in time. Try again in a moment.");
 });
 
 // The two schemas not exercised elsewhere: a mismatch would not degrade to
@@ -441,6 +444,59 @@ test("a fault is an error-level record", async () => {
   householdSeerr.search.mockRejectedValueOnce(new Error("Seerr API error: 502 Bad Gateway"));
   const [record] = await toolRecords({}, "search_media", { query: "x" });
   expect(record).toMatchObject({ status: "error", error_type: "SeerrApiError", upstream_status: 502, _level: "error" });
+});
+
+// The integration mocks stand in for SeerrClient, so a failure injected
+// through them never passes SeerrClient.fetch, which is what attaches
+// upstreamOperation. These two let a real client fail behind the mock, so
+// the record is checked end to end: client -> classifyToolError -> log.
+async function throughRealClient(respond: (init: RequestInit) => Promise<unknown>) {
+  const real = new SeerrClient({ baseUrl: "http://seerr.test", apiKey: "k", timeoutMs: 20 });
+  const fetchSpy = vi.spyOn(globalThis, "fetch").mockImplementation((_url, init) => respond(init ?? {}) as Promise<Response>);
+  // Every search goes to the real client: a bare-year query makes two.
+  householdSeerr.search.mockImplementation((term: string) => real.search(term));
+  try {
+    const records = await toolRecords({}, "search_media", { query: "Мошенники 2026" });
+    expect(records).toHaveLength(1);
+    return records[0];
+  } finally {
+    fetchSpy.mockRestore();
+    householdSeerr.search.mockReset();
+    householdSeerr.search.mockResolvedValue([]);
+  }
+}
+
+test("a Seerr error reaches the record with the operation it failed on", async () => {
+  const record = await throughRealClient(async () => ({ ok: false, status: 502, statusText: "Bad Gateway" }));
+  expect(record).toMatchObject({
+    status: "error", error_type: "SeerrApiError", upstream_status: 502, upstream_operation: "GET /api/v1/search", _level: "error",
+  });
+  expect(JSON.stringify(record)).not.toContain("Мошенники");
+});
+
+test("a Seerr that does not answer is a named timeout in the record", async () => {
+  const record = await throughRealClient((init) => new Promise((_, reject) => {
+    init.signal!.addEventListener("abort", () => reject(Object.assign(new Error("This operation was aborted"), { name: "AbortError" })));
+  }));
+  expect(record).toMatchObject({
+    status: "error", error_type: "SeerrTimeoutError", upstream_operation: "GET /api/v1/search", _level: "error",
+  });
+  expect(record.upstream_status).toBeUndefined();
+});
+
+// The SDK checks arguments against inputSchema before any tool callback
+// runs, so the call never reaches instrument(). It still gets its record.
+test("arguments the schema rejects still leave one refused record, without the arguments", async () => {
+  householdSeerr.search.mockClear();
+  const records = await toolRecords({}, "search_media", { query: 42, note: "Мошенники" });
+  expect(records).toHaveLength(1);
+  expect(records[0]).toMatchObject({ tool: "search_media", status: "refused", error_type: "InvalidArguments", _level: "info" });
+  expect(typeof records[0].request_id).toBe("string");
+  expect(JSON.stringify(records[0])).not.toContain("Мошенники");
+  expect(householdSeerr.search).not.toHaveBeenCalled();
+  // A valid call is still recorded once, by instrument() alone.
+  householdSeerr.search.mockResolvedValueOnce([]);
+  expect(await toolRecords({}, "search_media", { query: "x" })).toHaveLength(1);
 });
 
 test("classifyToolError: designed answers are refused, faults are errors", async () => {
