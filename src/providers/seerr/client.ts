@@ -276,7 +276,10 @@ export class SeerrClient {
       try {
         return await response.json();
       } catch (error) {
-        throw relabel(error);
+        // A body that arrived whole but is not JSON is a verdict, as on the
+        // untrusted path: final, not a timeout, and not retried. An abort
+        // mid-body never surfaces as a SyntaxError.
+        throw error instanceof SyntaxError ? error : relabel(error);
       }
     } finally {
       clearTimeout(timeoutId);
