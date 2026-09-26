@@ -29,14 +29,24 @@ describe("parseMediaQuery", () => {
     expect(parseMediaQuery(query, NOW)).toEqual({ titleQuery: query, yearHint: undefined, yearWasBare: false });
   });
 
-  // The query is caller-controlled and unbounded; the trailing-year split
-  // must stay linear on inputs that do not end in a year.
-  test("a long query that is not a title with a year is parsed in linear time", () => {
-    for (const hostile of ["a ".repeat(50_000), "a,".repeat(50_000) + "x", "a" + " -".repeat(50_000) + "1"]) {
+  // The query is caller-controlled and unbounded, so the trailing-year split
+  // must stay linear. The bound is generous on purpose: the regex this
+  // replaced took seconds on the first input, so a failure here means the
+  // parser regressed; do not raise the bound to silence it.
+  test("a long query is parsed in linear time", () => {
+    const hostile = [
+      "a ".repeat(50_000), // no year: the digit guard
+      "a,".repeat(50_000) + "x",
+      "a" + " -".repeat(50_000) + "1",
+      "a" + " ".repeat(200_000) + "2026", // the separator walk
+      "-".repeat(200_000) + "2026", // walks to the start, then no letter
+    ];
+    for (const query of hostile) {
       const started = performance.now();
-      parseMediaQuery(hostile, NOW);
+      parseMediaQuery(query, NOW);
       expect(performance.now() - started).toBeLessThan(200);
     }
+    expect(parseMediaQuery("a" + " ".repeat(200_000) + "2026", NOW)).toEqual({ titleQuery: "a", yearHint: 2026, yearWasBare: true });
   });
 
   test("Title12026 and 12026 are not a title with a year", () => {

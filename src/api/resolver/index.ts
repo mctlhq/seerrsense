@@ -97,16 +97,11 @@ export class MediaResolver {
       };
     }
 
-    // 2. Normalized match: punctuation and case folded. The candidates just
-    // found are tried first; only a title whose normal form differs is
-    // searched again, as that normal form (punctuation becomes a space, so
-    // "Spider-Man: No Way Home" is searched as "spider man no way home").
-    const normalizedQuery = normaliseTitle(title);
-    let normalizedMatch = exactTop(nativeResults, title, false);
-    if (!normalizedMatch && normalizedQuery !== "" && normalizedQuery !== title.toLowerCase()) {
-      const year = parsed.yearHint !== undefined ? ` (${parsed.yearHint})` : "";
-      normalizedMatch = exactTop(await searchMedia(search, normalizedQuery + year), title, false);
-    }
+    // 2. Normalized match: punctuation and case folded (normaliseTitle), over
+    // the candidates step 1 already has. No second search: searchMedia sent
+    // Seerr the title, and the normal form of it is the same cache entry, so
+    // it could not return anything new.
+    const normalizedMatch = exactTop(nativeResults, title, false);
     if (normalizedMatch) {
       return {
         candidate: normalizedMatch,

@@ -296,4 +296,6 @@ test("the normalised step agrees with the search layer on punctuation", async ()
   const result = await new MediaResolver({ search } as any, { extract }).resolveMedia("Spider Man No Way Home");
   expect(result.candidate.providerId).toBe(634649);
   expect(result.confidence).toBe(0.8);
+  // The fold is local to the candidates step 1 found; nothing is re-searched.
+  expect(search).toHaveBeenCalledTimes(1);
 });
