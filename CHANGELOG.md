@@ -5,8 +5,7 @@
 
 ### Bug Fixes
 
-* keep untrusted guard verdicts final, bound the rejected tool name, honest matchReason ([b236fab](https://github.com/mctlhq/seerrsense/commit/b236fabeae42f6c422ecb90ffcdbed27eb5da149))
-* keep untrusted guard verdicts final, bound the rejected tool name, honest matchReason ([d69348b](https://github.com/mctlhq/seerrsense/commit/d69348befbb7e5135167e1d30f590990e6718d15))
+* keep untrusted guard verdicts final, bound the rejected tool name, honest matchReason ([#87](https://github.com/mctlhq/seerrsense/issues/87)) ([b236fab](https://github.com/mctlhq/seerrsense/commit/b236fabeae42f6c422ecb90ffcdbed27eb5da149))
 
 ## [1.11.3](https://github.com/mctlhq/seerrsense/compare/1.11.2...1.11.3) (2026-09-26)
 
