@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.11.3](https://github.com/mctlhq/seerrsense/compare/1.11.2...1.11.3) (2026-09-26)
+
+
+### Bug Fixes
+
+* a Seerr that does not answer is a named `SeerrTimeoutError`, arguments the schema rejects leave an `InvalidArguments` record, and search order and whitespace follow-ups from [#80](https://github.com/mctlhq/seerrsense/issues/80) ([#84](https://github.com/mctlhq/seerrsense/issues/84)) ([7fa527b](https://github.com/mctlhq/seerrsense/commit/7fa527b450eb0e9906f6753b20b31931df764273))
+
 ## [1.11.2](https://github.com/mctlhq/seerrsense/compare/1.11.1...1.11.2) (2026-09-26)
 
 
