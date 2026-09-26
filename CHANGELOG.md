@@ -1,5 +1,14 @@
 # Changelog
 
+## [1.11.3](https://github.com/mctlhq/seerrsense/compare/1.11.2...1.11.3) (2026-09-26)
+
+
+### Bug Fixes
+
+* a timeout is the signal, not the error's name; review follow-ups on [#84](https://github.com/mctlhq/seerrsense/issues/84) ([544acac](https://github.com/mctlhq/seerrsense/commit/544acac7761c438839b473a7dd2c83535aba5147))
+* follow-ups from [#80](https://github.com/mctlhq/seerrsense/issues/80) -- timeout name, rejected-arguments record, search order, whitespace ([7b05389](https://github.com/mctlhq/seerrsense/commit/7b05389c881a4f5a6f4de9ca232af7728aff61b9))
+* name Seerr timeouts, record rejected arguments, search order and whitespace ([7fa527b](https://github.com/mctlhq/seerrsense/commit/7fa527b450eb0e9906f6753b20b31931df764273))
+
 ## [1.11.2](https://github.com/mctlhq/seerrsense/compare/1.11.1...1.11.2) (2026-09-26)
 
 
