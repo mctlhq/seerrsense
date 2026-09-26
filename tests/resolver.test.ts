@@ -269,3 +269,28 @@ test("a year that matches no exact title is not forced onto another year", async
   expect(extract).toHaveBeenCalledOnce();
   expect(result.matchReason).toContain("expected 2019");
 });
+
+// A title that ends in a plausible year: searchMedia keeps the film titled
+// exactly that first, and the resolver must take it rather than demand a
+// film from 1984.
+test("a title that is a year resolves natively to that title", async () => {
+  const extract = vi.fn().mockRejectedValue(new Error("the model must not be asked"));
+  const ww84 = { providerId: 464052, provider: "tmdb", title: "Wonder Woman 1984", year: 2020, mediaType: "movie", status: "UNKNOWN" };
+  const ww = { providerId: 297762, provider: "tmdb", title: "Wonder Woman", year: 2017, mediaType: "movie", status: "UNKNOWN" };
+  const search = vi.fn(async (term: string) =>
+    term === "Wonder Woman 1984" ? [ww84] : term === "Wonder Woman" ? [ww, ww84] : [],
+  );
+  const result = await new MediaResolver({ search } as any, { extract }).resolveMedia("Wonder Woman 1984");
+  expect(result.candidate.providerId).toBe(464052);
+  expect(result.confidence).toBe(0.9);
+  expect(extract).not.toHaveBeenCalled();
+});
+
+test("the normalised step agrees with the search layer on punctuation", async () => {
+  const extract = vi.fn().mockRejectedValue(new Error("the model must not be asked"));
+  const film = { providerId: 634649, provider: "tmdb", title: "Spider-Man: No Way Home", year: 2021, mediaType: "movie", status: "UNKNOWN" };
+  const search = vi.fn(async (term: string) => (term === "Spider Man No Way Home" ? [film] : []));
+  const result = await new MediaResolver({ search } as any, { extract }).resolveMedia("Spider Man No Way Home");
+  expect(result.candidate.providerId).toBe(634649);
+  expect(result.confidence).toBe(0.8);
+});

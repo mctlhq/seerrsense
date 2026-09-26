@@ -715,6 +715,10 @@ export function buildServer(
   const handler = createMcpHandler(async (ctx) => {
     const tenant = await tenants.resolve(ctx.authInfo);
     const budget = authStore ? { store: authStore, options: resolveBudget } : undefined;
+    // Read once per factory call, which is once per HTTP request: the SDK
+    // builds a fresh server for every request (see createMcpHandler's docs),
+    // so these ids cannot outlive the request they name. If that ever
+    // changes, these must move into the per-call record instead.
     const headers = ctx.requestInfo?.headers;
     return createSeerrSenseMcpServer(
       ctx.authInfo?.scopes,

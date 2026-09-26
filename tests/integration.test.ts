@@ -399,6 +399,49 @@ test("every tool call leaves one mcp_tool_call record, without the person's word
   expect(JSON.stringify(record)).not.toContain("secret film");
 });
 
+async function toolRecords(headers: Record<string, string>, name: string, args: Record<string, unknown>) {
+  const logged: unknown[] = [];
+  const info = vi.spyOn(app.log, "info").mockImplementation((...a: unknown[]) => { logged.push(a[0]); });
+  const error = vi.spyOn(app.log, "error").mockImplementation((...a: unknown[]) => { logged.push(a[0]); });
+  await app.inject({
+    method: "POST",
+    url: "/mcp",
+    headers: { accept: "application/json, text/event-stream", authorization: "Bearer secret123", ...headers },
+    payload: { jsonrpc: "2.0", id: 31, method: "tools/call", params: { name, arguments: args } },
+  });
+  info.mockRestore();
+  error.mockRestore();
+  return logged.filter((e) => (e as { event?: unknown }).event === "mcp_tool_call") as Record<string, unknown>[];
+}
+
+// mcp-session-id is caller-controlled and reaches every record, so only an
+// opaque, short value is kept.
+test("a well-formed session id is logged; a malformed one is not", async () => {
+  householdSeerr.search.mockResolvedValue([]);
+  const [good] = await toolRecords({ "mcp-session-id": "sess-abc_123.x" }, "search_media", { query: "x" });
+  expect(good.session_id).toBe("sess-abc_123.x");
+  const [long] = await toolRecords({ "mcp-session-id": "a".repeat(200) }, "search_media", { query: "x" });
+  expect(long).not.toHaveProperty("session_id");
+  const [spaced] = await toolRecords({ "mcp-session-id": "has space" }, "search_media", { query: "x" });
+  expect(spaced).not.toHaveProperty("session_id");
+});
+
+// A designed answer is "refused", logged at info, and never an error.
+test("a title already in Seerr is a refused call, not an error", async () => {
+  // The client is mocked, so getMedia returns the mapped candidate directly.
+  householdSeerr.getMedia.mockResolvedValueOnce({ provider: "tmdb", providerId: 1, mediaType: "movie", title: "x", status: "AVAILABLE" });
+  const [record] = await toolRecords({}, "request_media", { mediaType: "movie", tmdbId: 1 });
+  expect(record).toMatchObject({ tool: "request_media", status: "refused", error_type: "AlreadyInSeerr" });
+});
+
+test("classifyToolError: designed answers are refused, faults are errors", async () => {
+  const { classifyToolError } = await import("../src/mcp/server.js");
+  expect(classifyToolError(new Error("LLM_UNAVAILABLE: no fallback"), false)).toMatchObject({ status: "refused", error_type: "ResolverUnavailable" });
+  expect(classifyToolError(new Error("Semantic resolution failed: none"), false)).toMatchObject({ status: "refused", error_type: "NotResolved" });
+  expect(classifyToolError(new Error("Seerr API error: 404 Not Found"), true)).toMatchObject({ status: "refused", error_type: "NotFound" });
+  expect(classifyToolError(new Error("Seerr API error: 502 Bad Gateway"), false)).toMatchObject({ status: "error", error_type: "SeerrApiError", upstream_status: 502 });
+});
+
 test("an unknown failure is not relayed to the caller, and the log gets its identity only", async () => {
   const failure = Object.assign(new Error("APICallError: https://api.provider.example/v1 answered 500"), {
     name: "APICallError",

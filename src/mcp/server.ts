@@ -264,6 +264,9 @@ export function classifyToolError(error: unknown, byId: boolean): Outcome {
   if (error instanceof ResolveBudgetError) return refused("ResolveBudgetError");
   if (message.startsWith("Media is already in status: ")) return refused("AlreadyInSeerr");
   if (message.startsWith("Semantic resolution failed")) return refused("NotResolved");
+  // A supported configuration, not a fault: without NEBIUS_API_KEY a query
+  // with no native match gets this designed answer (explain() words it).
+  if (message.startsWith("LLM_UNAVAILABLE")) return refused("ResolverUnavailable");
   if (byId && upstream_status === 404) return refused("NotFound");
   const name = error instanceof Error ? error.name : "NonError";
   const error_type = name === "Error" && /^Seerr API error: /.test(message) ? "SeerrApiError" : name;

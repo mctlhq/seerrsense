@@ -9,7 +9,8 @@ export function normaliseTitle(value: string | null | undefined): string {
   return (value ?? "").replace(/[^\p{L}\p{N}\s]/gu, " ").replace(/\s+/gu, " ").trim().toLowerCase();
 }
 
-function titled(candidate: MediaCandidate, title: string): boolean {
+/** Whether a candidate is called `title`, in its display or original title, normalised. */
+export function titled(candidate: MediaCandidate, title: string): boolean {
   const wanted = normaliseTitle(title);
   return wanted !== "" && (normaliseTitle(candidate.title) === wanted || normaliseTitle(candidate.originalTitle) === wanted);
 }
