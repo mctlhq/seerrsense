@@ -281,6 +281,16 @@ export function classifyToolError(error: unknown, byId: boolean): Outcome {
 }
 
 /**
+ * The tool name as the record may carry it. It is the registered name today,
+ * but it arrives through private SDK API; bounded like the session id
+ * (loggableSessionId), so a release that passed the caller's spelling
+ * through could not put an arbitrary string into the log.
+ */
+function loggableToolName(value: unknown): string {
+  return typeof value === "string" && /^[\w.-]{1,64}$/.test(value) ? value : "unknown";
+}
+
+/**
  * Records a tools/call whose arguments inputSchema rejects. The SDK validates
  * them before any tool callback runs and answers with an isError result, so
  * instrument() never sees the call, and it left nothing but "POST /mcp 200"
@@ -302,7 +312,7 @@ export function classifyToolError(error: unknown, byId: boolean): Outcome {
  * call naming a tool that does not exist is refused before validation and
  * is not recorded: its name is whatever the caller sent.
  */
-function recordRejectedArguments(server: McpServer, onRejected: (tool: string, duration_ms: number) => void) {
+export function recordRejectedArguments(server: McpServer, onRejected: (tool: string, duration_ms: number) => void) {
   const sdk = server as unknown as {
     validateToolInput?: (tool: unknown, args: unknown, toolName: string) => Promise<unknown>;
   };
@@ -313,7 +323,7 @@ function recordRejectedArguments(server: McpServer, onRejected: (tool: string, d
     try {
       return await validate.call(server, tool, args, toolName);
     } catch (error) {
-      onRejected(toolName, Math.round(performance.now() - started));
+      onRejected(loggableToolName(toolName), Math.round(performance.now() - started));
       throw error;
     }
   };

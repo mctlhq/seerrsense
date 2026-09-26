@@ -93,12 +93,16 @@ export class MediaResolver {
 
     // 1. Native Seerr search (exact or very close match)
     const nativeResults = await searchMedia(search, query);
+    // The reason names the year only when it was used as one: for "Wonder
+    // Woman 1984" the number is the title and the film is from 2020.
+    const noteFor = (match: MediaCandidate, strict: boolean) =>
+      parsed.yearWasBare && same(match, query, strict) ? "" : yearNote;
     const nativeMatch = exactTop(nativeResults, title, true);
     if (nativeMatch) {
       return {
         candidate: nativeMatch,
         confidence: 0.9,
-        matchReason: `Exact title match via native Seerr search${yearNote}`
+        matchReason: `Exact title match via native Seerr search${noteFor(nativeMatch, true)}`
       };
     }
 
@@ -111,7 +115,7 @@ export class MediaResolver {
       return {
         candidate: normalizedMatch,
         confidence: 0.8,
-        matchReason: `Normalized title match via native Seerr search${yearNote}`
+        matchReason: `Normalized title match via native Seerr search${noteFor(normalizedMatch, false)}`
       };
     }
 

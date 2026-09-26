@@ -309,6 +309,12 @@ export class SeerrClient {
     try {
       return await this.readUntrusted(response);
     } catch (error) {
+      // readUntrusted's own verdicts stand even if the timer fired while
+      // they were being reached: the streamed size cap and a body that is
+      // not JSON are thrown after an await (readCapped's reader.cancel()),
+      // and relabelling them a timeout would drop the status that makes
+      // them final -- a host that trickled 5 MB would be read a second time.
+      if (error instanceof SeerrUnreachableError || error instanceof SeerrAccessChallengeError) throw error;
       throw timedOut(controller) ? new SeerrTimeoutError() : error;
     } finally {
       clearTimeout(timeoutId);

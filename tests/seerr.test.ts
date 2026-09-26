@@ -285,6 +285,43 @@ describe("SeerrClient timeouts and retries", () => {
     await client.close();
   });
 
+  // The size cap and a non-JSON body are decided after an await (the
+  // reader's cancel()); a timer firing during it must not turn either into a
+  // retryable timeout.
+  const untrustedBody = (chunks: Uint8Array[]) => (_url: string, init: RequestInit) => Promise.resolve({
+    ok: true, status: 200, headers: new Headers(),
+    body: { getReader: () => {
+      const queue = [...chunks];
+      return {
+        read: async () => (queue.length ? { done: false, value: queue.shift() } : { done: true, value: undefined }),
+        // Settles only once this attempt's own timer has fired.
+        cancel: () => new Promise<void>((resolve) => init.signal!.addEventListener("abort", () => resolve())),
+      };
+    } },
+  });
+
+  it("keeps an over-size body final when the timer fires during cancel", async () => {
+    const client = new SeerrClient({
+      baseUrl: "https://mine.example", apiKey: "key", untrusted: true, timeoutMs: 30,
+      lookup: async () => ["93.184.216.34"],
+    });
+    (global.fetch as any).mockImplementation(untrustedBody([new Uint8Array(5 * 1024 * 1024 + 1)]));
+    await expect(client.getMedia("movie", 1)).rejects.toMatchObject({ name: "SeerrUnreachableError", upstreamStatus: 200 });
+    expect(global.fetch).toHaveBeenCalledTimes(1);
+    await client.close();
+  });
+
+  it("keeps a non-JSON body final when the timer fires during cancel", async () => {
+    const client = new SeerrClient({
+      baseUrl: "https://mine.example", apiKey: "key", untrusted: true, timeoutMs: 30,
+      lookup: async () => ["93.184.216.34"],
+    });
+    (global.fetch as any).mockImplementation(untrustedBody([new TextEncoder().encode("<html>login</html>")]));
+    await expect(client.getMedia("movie", 1)).rejects.toMatchObject({ name: "SeerrUnreachableError", upstreamStatus: 200 });
+    expect(global.fetch).toHaveBeenCalledTimes(1);
+    await client.close();
+  });
+
   it("keeps a transport failure that is not a timeout as unreachable", async () => {
     const client = new SeerrClient({
       baseUrl: "https://mine.example", apiKey: "key", untrusted: true, timeoutMs: 30,
