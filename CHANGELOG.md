@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.11.2](https://github.com/mctlhq/seerrsense/compare/1.11.1...1.11.2) (2026-09-26)
+
+
+### Bug Fixes
+
+* **search:** a year in the query is a hint, not part of the title; one structured `mcp_tool_call` log record per MCP tool call ([#80](https://github.com/mctlhq/seerrsense/issues/80)) ([212b7bd](https://github.com/mctlhq/seerrsense/commit/212b7bd5427d269556d32240c6143109b88d6438))
+
 ## [1.11.1](https://github.com/mctlhq/seerrsense/compare/1.11.0...1.11.1) (2026-09-26)
 
 
