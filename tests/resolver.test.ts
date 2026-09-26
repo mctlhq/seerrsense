@@ -90,7 +90,10 @@ test("MediaResolver routing corpus passes without invoking extractor", async () 
 
 function seerr(catalogue: Record<string, any[]>) {
   return {
-    search: vi.fn(async (query: string) => catalogue[query.toLowerCase()] ?? []),
+    // The fixtures name the TMDB id `id`; the client's candidates carry it as
+    // providerId, which searchMedia de-duplicates on.
+    search: vi.fn(async (query: string) =>
+      (catalogue[query.toLowerCase()] ?? []).map((c) => ({ providerId: c.id, ...c }))),
     getMedia: vi.fn(),
     requestMedia: vi.fn(),
     status: vi.fn(),

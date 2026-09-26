@@ -29,6 +29,21 @@ describe("parseMediaQuery", () => {
     expect(parseMediaQuery(query, NOW)).toEqual({ titleQuery: query, yearHint: undefined, yearWasBare: false });
   });
 
+  // The query is caller-controlled and unbounded; the trailing-year split
+  // must stay linear on inputs that do not end in a year.
+  test("a long query that is not a title with a year is parsed in linear time", () => {
+    for (const hostile of ["a ".repeat(50_000), "a,".repeat(50_000) + "x", "a" + " -".repeat(50_000) + "1"]) {
+      const started = performance.now();
+      parseMediaQuery(hostile, NOW);
+      expect(performance.now() - started).toBeLessThan(200);
+    }
+  });
+
+  test("Title12026 and 12026 are not a title with a year", () => {
+    expect(parseMediaQuery("Title12026", NOW).yearHint).toBeUndefined();
+    expect(parseMediaQuery("Title 12026", NOW).yearHint).toBeUndefined();
+  });
+
   test("a bare trailing year that may be part of the title is flagged, not trusted", () => {
     expect(parseMediaQuery("Wonder Woman 1984", NOW)).toEqual({
       titleQuery: "Wonder Woman",

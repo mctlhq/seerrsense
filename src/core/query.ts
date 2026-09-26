@@ -36,12 +36,25 @@ function collapse(value: string): string {
   return value.replace(/\s+/gu, " ").trim();
 }
 
+/** What may sit between a title and a trailing year: "Title 2026", "Title, 2026", "Title – 2026". */
+const SEPARATORS = new Set([" ", ",", "-", "–", "—"]);
+
 /**
- * A trailing four-digit number after a title, optionally after a comma or a
- * dash: "Title 2026", "Title, 2026", "Title – 2026". The title part must
- * contain a letter, so "1917" and "2012" alone stay titles.
+ * Splits off a trailing four-digit number, scanning back from the end once.
+ * Deliberately not a regular expression: the obvious one,
+ * /^(.*\p{L}.*?)[\s,–—-]+(\d{4})$/, backtracks quadratically on a long
+ * query that does not end in a year, and the query is caller-controlled.
+ * The title part must contain a letter, so "1917" and "2012" stay titles.
  */
-const TRAILING_YEAR = /^(.*\p{L}.*?)[\s,–—-]+(\d{4})$/u;
+function splitTrailingYear(text: string): { title: string; year: number } | undefined {
+  const end = text.length;
+  if (end < 6 || !/^\d{4}$/.test(text.slice(end - 4))) return undefined;
+  let cut = end - 4;
+  if (!SEPARATORS.has(text[cut - 1])) return undefined; // "Title2026" or "12026"
+  while (cut > 0 && SEPARATORS.has(text[cut - 1])) cut--;
+  const title = text.slice(0, cut);
+  return /\p{L}/u.test(title) ? { title, year: Number(text.slice(end - 4)) } : undefined;
+}
 
 export function parseMediaQuery(query: string, now: Date = new Date()): MediaQuery {
   let yearHint: number | undefined;
@@ -61,10 +74,10 @@ export function parseMediaQuery(query: string, now: Date = new Date()): MediaQue
 
   let yearWasBare = false;
   if (yearHint === undefined) {
-    const match = TRAILING_YEAR.exec(text);
-    if (match && plausibleYear(Number(match[2]), now)) {
-      yearHint = Number(match[2]);
-      text = collapse(match[1]);
+    const split = splitTrailingYear(text);
+    if (split && plausibleYear(split.year, now)) {
+      yearHint = split.year;
+      text = collapse(split.title);
       yearWasBare = true;
     }
   }

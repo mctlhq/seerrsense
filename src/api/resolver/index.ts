@@ -38,11 +38,6 @@ const REASON: Record<Provenance, string> = {
   echo: "the model returned the query instead of a title",
 };
 
-/** Case- and punctuation-insensitive, so "The Matrix!" and "the matrix" are one term. */
-function normalise(value: string): string {
-  return value.replace(/[^\p{L}\p{N}\s]/gu, " ").replace(/\s+/gu, " ").trim().toLowerCase();
-}
-
 export class MediaResolver {
   constructor(
     private seerrClient: SeerrClient,
@@ -55,7 +50,7 @@ export class MediaResolver {
     // request to Seerr cannot produce a different answer.
     const searched = new Map<string, MediaCandidate[]>();
     const search = async (term: string): Promise<MediaCandidate[]> => {
-      const key = normalise(term);
+      const key = normaliseTitle(term);
       const cached = searched.get(key);
       if (cached) return cached;
       const results = await this.seerrClient.search(term);
@@ -138,7 +133,10 @@ export class MediaResolver {
     }
 
     for (const { term, provenance } of terms) {
-      const results = await search(term);
+      // The model's term goes through the same reading as a person's: it
+      // writes "Ocean's Eleven 2001" as readily as anyone, and TMDB finds
+      // nothing for that.
+      const results = await searchMedia(search, term);
       if (results.length > 0) return rankCandidates(intent, results, provenance);
     }
 
@@ -158,13 +156,13 @@ function lookupTerms(intent: MediaIntent, query: string): Array<{ term: string; 
   const seen = new Set<string>();
   const add = (term: string | undefined, provenance: Provenance) => {
     if (!term) return;
-    const key = normalise(term);
+    const key = normaliseTitle(term);
     if (key === "" || seen.has(key)) return;
     seen.add(key);
     terms.push({ term, provenance });
   };
 
-  const echoesQuery = intent.titleHint !== undefined && normalise(intent.titleHint) === normalise(query);
+  const echoesQuery = intent.titleHint !== undefined && normaliseTitle(intent.titleHint) === normaliseTitle(query);
   const provenance: Provenance = echoesQuery
     ? "echo"
     : intent.titleSource === "stated"
