@@ -322,3 +322,20 @@ test("the normalised step agrees with the search layer on punctuation", async ()
   // The fold is local to the candidates step 1 found; nothing is re-searched.
   expect(search).toHaveBeenCalledTimes(1);
 });
+
+// The normalised step names the year the same way: only when it used one.
+test.each([
+  ["Wonder Woman: 1984", 464052, "Normalized title match via native Seerr search"],
+  ["spider-man no way home (2021)", 634649, "Normalized title match via native Seerr search, year 2021"],
+])("%s: the normalised reason names the year only when it was used", async (query, id, reason) => {
+  const extract = vi.fn().mockRejectedValue(new Error("the model must not be asked"));
+  const films = [
+    { providerId: 464052, provider: "tmdb", title: "Wonder Woman 1984", year: 2020, mediaType: "movie", status: "UNKNOWN" },
+    { providerId: 634649, provider: "tmdb", title: "Spider-Man: No Way Home", year: 2021, mediaType: "movie", status: "UNKNOWN" },
+  ];
+  const search = vi.fn(async () => films.filter((f) => f.providerId === id));
+  const result = await new MediaResolver({ search } as any, { extract }).resolveMedia(query);
+  expect(result.candidate.providerId).toBe(id);
+  expect(result.confidence).toBe(0.8);
+  expect(result.matchReason).toBe(reason);
+});

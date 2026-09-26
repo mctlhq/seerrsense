@@ -83,26 +83,32 @@ export class MediaResolver {
       return flat(candidate.title) === lower
         || (candidate.originalTitle != null && flat(candidate.originalTitle) === lower);
     };
-    const exactTop = (results: MediaCandidate[], wanted: string, strict: boolean): MediaCandidate | undefined => {
+    // `yearUsed` says which branch matched, so the reason names the year only
+    // when it was used as one: for "Wonder Woman 1984" the number is the
+    // title and the film is from 2020.
+    const exactTop = (
+      results: MediaCandidate[],
+      wanted: string,
+      strict: boolean,
+    ): { candidate: MediaCandidate; yearUsed: boolean } | undefined => {
       const top = results[0];
       if (!top) return undefined;
-      if (parsed.yearWasBare && same(top, query, strict)) return top;
+      if (parsed.yearWasBare && same(top, query, strict)) return { candidate: top, yearUsed: false };
       const dated = parsed.yearHint === undefined || top.year === parsed.yearHint;
-      return same(top, wanted, strict) && dated ? top : undefined;
+      return same(top, wanted, strict) && dated
+        ? { candidate: top, yearUsed: parsed.yearHint !== undefined }
+        : undefined;
     };
+    const noteFor = (match: { yearUsed: boolean }) => (match.yearUsed ? yearNote : "");
 
     // 1. Native Seerr search (exact or very close match)
     const nativeResults = await searchMedia(search, query);
-    // The reason names the year only when it was used as one: for "Wonder
-    // Woman 1984" the number is the title and the film is from 2020.
-    const noteFor = (match: MediaCandidate, strict: boolean) =>
-      parsed.yearWasBare && same(match, query, strict) ? "" : yearNote;
     const nativeMatch = exactTop(nativeResults, title, true);
     if (nativeMatch) {
       return {
-        candidate: nativeMatch,
+        candidate: nativeMatch.candidate,
         confidence: 0.9,
-        matchReason: `Exact title match via native Seerr search${noteFor(nativeMatch, true)}`
+        matchReason: `Exact title match via native Seerr search${noteFor(nativeMatch)}`
       };
     }
 
@@ -113,9 +119,9 @@ export class MediaResolver {
     const normalizedMatch = exactTop(nativeResults, title, false);
     if (normalizedMatch) {
       return {
-        candidate: normalizedMatch,
+        candidate: normalizedMatch.candidate,
         confidence: 0.8,
-        matchReason: `Normalized title match via native Seerr search${noteFor(normalizedMatch, false)}`
+        matchReason: `Normalized title match via native Seerr search${noteFor(normalizedMatch)}`
       };
     }
 
