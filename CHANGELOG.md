@@ -1,5 +1,13 @@
 # Changelog
 
+## [1.11.1](https://github.com/mctlhq/seerrsense/compare/1.11.0...1.11.1) (2026-09-26)
+
+
+### Bug Fixes
+
+* **ci:** portal allowlist dispatch runs from main only; link the vendor run ([85ebcea](https://github.com/mctlhq/seerrsense/commit/85ebcea6521dad2875a2e3d27e6cf9d98788385b))
+* **mcp:** open the tool output schemas ([2594432](https://github.com/mctlhq/seerrsense/commit/2594432ab9b317a2e87506739a3a3cc5a39acde8))
+
 ## [1.11.0](https://github.com/mctlhq/seerrsense/compare/1.10.4...1.11.0) (2026-09-24)
 
 
