@@ -45,7 +45,16 @@ const SERVER_VERSION: string = createRequire(import.meta.url)("../../package.jso
 const READ_ONLY = { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false } as const;
 const WRITE = { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false } as const;
 
-const ResolutionResultSchema = z.object({
+/*
+ * Output schemas are z.looseObject, not z.object, on purpose. Zod 4
+ * serialises z.object as `additionalProperties: false`, and clients validate
+ * `structuredContent` against the advertised outputSchema -- the Cloudflare MCP
+ * portal against its stored copy -- so with closed schemas the first field
+ * added to an answer would fail that tool for every such client
+ * (mctlhq/.github#64). Input schemas stay z.object. The "output schemas are
+ * open" test in tests/integration.test.ts fails on a closed one anywhere.
+ */
+const ResolutionResultSchema = z.looseObject({
   candidate: MediaCandidateSchema,
   confidence: z.number().min(0).max(1).describe("How sure the resolver is, 0 to 1"),
   matchReason: z.string().describe("Why this candidate was chosen"),
@@ -58,21 +67,21 @@ const ResolutionResultSchema = z.object({
  * and is the first tool on that portal's allowlist, so it must stay free of
  * anything a person would not want a shared surface to show.
  */
-const WhoamiSchema = z.object({
+const WhoamiSchema = z.looseObject({
   subject: z.string().optional().describe("The OAuth subject this session was resolved for; absent in stdio mode"),
   email: z.string().describe("The Google account the session belongs to; empty for the legacy shared token and stdio"),
   source: z.enum(["own", "household", "none"]).describe("Whose Seerr this session reaches: the caller's own, a household member's, or none yet"),
   connected: z.boolean().describe("Whether a Seerr is reachable for this session at all"),
 });
 
-const SearchResultSchema = z.object({
+const SearchResultSchema = z.looseObject({
   results: z.array(MediaCandidateSchema).describe("Up to five best matches, in Seerr's order"),
 });
 
 /** Overseerr's MediaRequestStatus codes, as names a person can read. */
 const REQUEST_STATUS: Record<number, string> = { 1: "PENDING", 2: "APPROVED", 3: "DECLINED", 4: "FAILED", 5: "COMPLETED" };
 
-const RequestResultSchema = z.object({
+const RequestResultSchema = z.looseObject({
   requestId: z.number().int().positive().optional().describe("The request's id in Seerr, when Seerr returned one"),
   requestStatus: z.string().describe("PENDING, APPROVED, DECLINED, FAILED, COMPLETED, or UNKNOWN when Seerr did not say"),
   mediaType: MediaTypeSchema,

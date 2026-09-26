@@ -14,7 +14,10 @@ export const MediaStatusSchema = z.enum([
 ]);
 export type MediaStatus = z.infer<typeof MediaStatusSchema>;
 
-export const MediaCandidateSchema = z.object({
+// Open (z.looseObject): this is an MCP output schema too -- get_media returns
+// it and the search/resolve results nest it -- and a closed one breaks
+// portal clients on the first added field (see src/mcp/server.ts).
+export const MediaCandidateSchema = z.looseObject({
   provider: z.literal("tmdb").default("tmdb"),
   providerId: z.number().int().positive(),
   mediaType: MediaTypeSchema,
