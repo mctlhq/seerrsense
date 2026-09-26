@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.11.4](https://github.com/mctlhq/seerrsense/compare/1.11.3...1.11.4) (2026-09-26)
+
+
+### Bug Fixes
+
+* keep untrusted guard verdicts final, bound the rejected tool name, honest matchReason ([#87](https://github.com/mctlhq/seerrsense/issues/87)) ([b236fab](https://github.com/mctlhq/seerrsense/commit/b236fabeae42f6c422ecb90ffcdbed27eb5da149))
+
 ## [1.11.3](https://github.com/mctlhq/seerrsense/compare/1.11.2...1.11.3) (2026-09-26)
 
 
