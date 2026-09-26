@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.11.6](https://github.com/mctlhq/seerrsense/compare/1.11.5...1.11.6) (2026-09-26)
+
+
+### Bug Fixes
+
+* keep a household body that is not JSON final when the timer fires ([#93](https://github.com/mctlhq/seerrsense/issues/93)) ([9e254dc](https://github.com/mctlhq/seerrsense/commit/9e254dca95e8302f24f5b271ab9889527439b138))
+
 ## [1.11.5](https://github.com/mctlhq/seerrsense/compare/1.11.4...1.11.5) (2026-09-26)
 
 
