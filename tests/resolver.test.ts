@@ -286,6 +286,8 @@ test("a title that is a year resolves natively to that title", async () => {
   const result = await new MediaResolver({ search } as any, { extract }).resolveMedia("Wonder Woman 1984");
   expect(result.candidate.providerId).toBe(464052);
   expect(result.confidence).toBe(0.9);
+  // 1984 is the title, not a year: the film is from 2020.
+  expect(result.matchReason).toBe("Exact title match via native Seerr search");
   expect(extract).not.toHaveBeenCalled();
 });
 
@@ -299,7 +301,7 @@ test.each(["Wonder Woman  1984", " Wonder Woman 1984 "])("%j is still an exact m
   const result = await new MediaResolver({ search } as any, { extract }).resolveMedia(query);
   expect(result.candidate.providerId).toBe(464052);
   expect(result.confidence).toBe(0.9);
-  expect(result.matchReason).toMatch(/^Exact title match/);
+  expect(result.matchReason).toBe("Exact title match via native Seerr search");
 });
 
 test("a TMDB title with a doubled space is still an exact match", async () => {

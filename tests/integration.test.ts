@@ -499,6 +499,20 @@ test("arguments the schema rejects still leave one refused record, without the a
   expect(await toolRecords({}, "search_media", { query: "x" })).toHaveLength(1);
 });
 
+// The tool name arrives through private SDK API; only a bounded, plain
+// identifier reaches the record.
+test("a rejected-arguments record carries a bounded tool name", async () => {
+  const { recordRejectedArguments } = await import("../src/mcp/server.js");
+  const names: string[] = [];
+  const fake: any = { validateToolInput: async () => { throw new Error("Input validation error"); } };
+  recordRejectedArguments(fake, (tool) => names.push(tool));
+  for (const name of ["search_media", "x".repeat(65), "has space", "Мошенники", undefined]) {
+    // The rejection still reaches the SDK unchanged.
+    await expect(fake.validateToolInput({}, {}, name)).rejects.toThrow("Input validation error");
+  }
+  expect(names).toEqual(["search_media", "unknown", "unknown", "unknown", "unknown"]);
+});
+
 test("classifyToolError: designed answers are refused, faults are errors", async () => {
   const { classifyToolError } = await import("../src/mcp/server.js");
   expect(classifyToolError(new Error("LLM_UNAVAILABLE: no fallback"), false)).toMatchObject({ status: "refused", error_type: "ResolverUnavailable" });
