@@ -130,6 +130,47 @@ test("MCP POST /mcp listTools", async () => {
   expect(tools.find((t: any) => t.name === "resolve_media")).toBeDefined();
 });
 
+/** JSON-pointer-ish paths of every closed object in a JSON Schema. */
+function closedPaths(schema: unknown, path = "", underProperties = false): string[] {
+  if (Array.isArray(schema)) return schema.flatMap((v, i) => closedPaths(v, `${path}/${i}`));
+  if (schema === null || typeof schema !== "object") return [];
+  const out: string[] = [];
+  for (const [key, value] of Object.entries(schema)) {
+    // Under `properties` every key is a property NAME (one may be called
+    // `enum`); elsewhere these keywords hold data, not schemas.
+    if (!underProperties) {
+      if (key === "additionalProperties" && value === false) out.push(path || "/");
+      if (key === "examples" || key === "default" || key === "const" || key === "enum") continue;
+    }
+    out.push(...closedPaths(value, `${path}/${key}`, !underProperties && key === "properties"));
+  }
+  return out;
+}
+
+// Clients validate structuredContent against the advertised outputSchema (the
+// Cloudflare MCP portal against its stored copy), so additionalProperties:false
+// anywhere means the first field added to an answer fails that tool. Zod 4's
+// z.object serialises exactly that way; this reads what the SDK really sends.
+test("MCP output schemas are open at every level", async () => {
+  const response = await app.inject({
+    method: "POST",
+    url: "/mcp",
+    headers: { accept: "application/json, text/event-stream", authorization: "Bearer secret123" },
+    payload: { jsonrpc: "2.0", id: 7, method: "tools/list" },
+  });
+  expect(response.statusCode).toBe(200);
+  const tools = JSON.parse(response.payload.match(/data: ({.*})/)![1]).result.tools;
+  expect(tools).toHaveLength(5);
+  for (const t of tools) expect(t.outputSchema, t.name).toBeDefined();
+  const closed = tools.flatMap((t: any) => closedPaths(t.outputSchema).map((p) => `${t.name}: ${p}`));
+  expect(closed).toEqual([]);
+
+  // The detector itself, both directions.
+  expect(closedPaths({ properties: { a: { items: { additionalProperties: false } } } })).toEqual(["/properties/a/items"]);
+  expect(closedPaths({ properties: { enum: { additionalProperties: false } } })).toEqual(["/properties/enum"]);
+  expect(closedPaths({ properties: { additionalProperties: false } })).toEqual([]);
+});
+
 // What the connector directories check before a listing is accepted: every
 // tool carries a title, the read/write hints, and an output schema, and no
 // description tells the model how to behave.
