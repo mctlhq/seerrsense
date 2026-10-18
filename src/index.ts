@@ -26,6 +26,21 @@ async function start() {
     server.log.error(err);
     process.exit(1);
   }
+
+  // The image starts node as PID 1, and PID 1 gets no default SIGTERM action:
+  // without a handler the pod sits out its whole grace period and is killed.
+  // Close lets in-flight requests finish; the timer covers a client that holds
+  // a stream open past the kubelet's patience.
+  for (const signal of ["SIGTERM", "SIGINT"] as const) {
+    process.once(signal, () => {
+      server.log.info(`Shutting down on ${signal}`);
+      setTimeout(() => process.exit(1), 10_000).unref();
+      server.close().then(
+        () => process.exit(0),
+        () => process.exit(1),
+      );
+    });
+  }
 }
 
 start();
