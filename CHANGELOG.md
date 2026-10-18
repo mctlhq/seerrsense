@@ -1,5 +1,13 @@
 # Changelog
 
+## [1.11.7](https://github.com/mctlhq/seerrsense/compare/1.11.6...1.11.7) (2026-10-18)
+
+
+### Bug Fixes
+
+* run the image as a numeric non-root user ([f0b27dc](https://github.com/mctlhq/seerrsense/commit/f0b27dca48535590a026dd2d36b0f2ef544731dc))
+* run the image as a numeric non-root user ([a1828ab](https://github.com/mctlhq/seerrsense/commit/a1828ab40f937a9f97237a9755be33a8f22aac2e))
+
 ## [1.11.6](https://github.com/mctlhq/seerrsense/compare/1.11.5...1.11.6) (2026-09-26)
 
 
