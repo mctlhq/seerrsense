@@ -43,7 +43,7 @@ jobs:
       # values_path override: that default path is already the right one.
       #
       # mctl-agents is the backend-only App, deliberately not MCTL App
-      # (secrets.APP_ID), which is the customer-installed App being narrowed to
+      # (APP_CLIENT_ID), which is the customer-installed App being narrowed to
       # read-only permissions (mctlhq/mctl-gitops#761); actions:write on
       # mctl-gitops has to live on the internal App instead.
       - name: Generate Platform App token
