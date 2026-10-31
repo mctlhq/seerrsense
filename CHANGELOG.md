@@ -1,5 +1,13 @@
 # Changelog
 
+## [1.11.8](https://github.com/mctlhq/seerrsense/compare/1.11.7...1.11.8) (2026-10-31)
+
+
+### Bug Fixes
+
+* **web:** stop emitting color-scheme twice in the light tokens ([4f74173](https://github.com/mctlhq/seerrsense/commit/4f7417363fc9d52bd610a9ae8d07ab5d4881dd5c))
+* **web:** stop emitting color-scheme twice in the light tokens ([9ba0664](https://github.com/mctlhq/seerrsense/commit/9ba0664c23c9da84a5852f019b75db08eaae398a))
+
 ## [1.11.7](https://github.com/mctlhq/seerrsense/compare/1.11.6...1.11.7) (2026-10-18)
 
 
