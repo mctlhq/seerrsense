@@ -276,7 +276,7 @@ in CI and fails when the committed copy no longer matches the design system, so
 an upstream change arrives as a diff to review rather than as a surprise on the
 site.
 
-The source is a pinned version — `https://ui.mctl.ai/0.5.0/mctl.css` — not the
+The source is a pinned version — `https://ui.mctl.ai/0.19.0/mctl.css` — not the
 floating `mctl.css`. That path is served `immutable` and mctl-design's CI
 refuses to edit, move or delete a published version directory, so upgrading is
 an edit made here on purpose. Change the `SOURCE` constant in
@@ -449,7 +449,7 @@ authorization server.
 | `npm run build` | compile to `dist/` with `tsc` |
 | `npm run typecheck` | `tsc --noEmit` |
 | `npm test` | run the vitest suite |
-| `npm run sync:tokens` | regenerate `public/assets/tokens.css` from the pinned `https://ui.mctl.ai/0.5.0/mctl.css` |
+| `npm run sync:tokens` | regenerate `public/assets/tokens.css` from the pinned `https://ui.mctl.ai/0.19.0/mctl.css` |
 | `npm run check:tokens` | verify the committed tokens file still matches that source (CI gate) |
 
 CI (`.github/workflows/ci.yml`) runs, in order: `check:tokens`, `typecheck`,

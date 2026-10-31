@@ -23,7 +23,7 @@
  * something that happens to this page four hours after an unrelated merge on
  * another repository (mctlhq/mctl-design#75, #76).
  *
- * `@mctlhq/css@0.5.0` on GitHub Packages carries the same sheet and would also
+ * `@mctlhq/css@0.19.0` on GitHub Packages carries the same sheet and would also
  * be pinnable. It is not used because consuming it needs a GitHub Packages
  * token in this repository's CI and in the container build, which is
  * centralised in mctl-gitops and has no npm credentials. The pinned URL buys
@@ -35,7 +35,7 @@
  */
 import { readFileSync, writeFileSync } from "node:fs";
 
-const SOURCE = "https://ui.mctl.ai/0.5.0/mctl.css";
+const SOURCE = "https://ui.mctl.ai/0.19.0/mctl.css";
 const OUTPUT = new URL("../public/assets/tokens.css", import.meta.url).pathname;
 
 /**
@@ -54,7 +54,11 @@ function systemPreferenceBlock(themeCss) {
   if (!match) {
     throw new Error("no [data-theme='light'] rule in theme.css — the package layout changed");
   }
+  // Comments are dropped before splitting on ";": since 0.19.0 the light rule
+  // carries one, and a comment glued to the next declaration (or a ";" inside
+  // one) would otherwise leak into the derived block.
   const declarations = match[1]
+    .replace(/\/\*[\s\S]*?\*\//g, "")
     .split(";")
     .map((line) => line.trim())
     .filter(Boolean)
