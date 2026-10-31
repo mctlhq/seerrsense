@@ -62,6 +62,9 @@ function systemPreferenceBlock(themeCss) {
     .split(";")
     .map((line) => line.trim())
     .filter(Boolean)
+    // The block below always declares color-scheme itself; since 0.19.0 the
+    // light rule does too, which would emit it twice.
+    .filter((line) => !/^color-scheme\s*:/.test(line))
     .map((line) => `    ${line};`)
     .join("\n");
   return `

@@ -773,7 +773,6 @@
 @media (prefers-color-scheme: light) {
   :root:not([data-theme]) {
     color-scheme: light;
-    color-scheme: light;
     --surface-bg: var(--mctl-surface-light-bg);
     --surface-elevated: var(--mctl-surface-light-elevated);
     --surface-card: var(--mctl-surface-light-card);
