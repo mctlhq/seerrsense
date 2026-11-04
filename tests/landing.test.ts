@@ -456,4 +456,17 @@ describe("landing page", () => {
     expect(signIn).toBeGreaterThan(connector);
     expect(seerr).toBeGreaterThan(signIn);
   });
+
+  it("includes privacy-friendly Umami analytics on public pages and excludes it from account pages", async () => {
+    const publicPaths = ["/", "/privacy", "/terms", "/support"];
+    for (const path of publicPaths) {
+      const { payload } = await app.inject({ method: "GET", url: path });
+      expect(payload, path).toContain("https://stats.mctl.ai/insights.js");
+      expect(payload, path).toContain('data-website-id="5ee11000-8b07-4d27-98e6-0b611eeaa707"');
+      expect(payload, path).toContain('data-domains="seerrsense.mctl.ai"');
+    }
+
+    const { payload: accountPayload } = await app.inject({ method: "GET", url: "/account" });
+    expect(accountPayload).not.toContain("https://stats.mctl.ai/insights.js");
+  });
 });
