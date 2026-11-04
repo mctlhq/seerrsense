@@ -1,5 +1,13 @@
 # Changelog
 
+## [1.12.0](https://github.com/mctlhq/seerrsense/compare/1.11.8...1.12.0) (2026-11-04)
+
+
+### Features
+
+* **analytics:** add self-hosted umami tracker and privacy disclosures ([a6eb2b0](https://github.com/mctlhq/seerrsense/commit/a6eb2b01bc954e6aee3a54790a1167ec94b11670))
+* **analytics:** add self-hosted umami tracker for seerrsense.mctl.ai ([7d230fd](https://github.com/mctlhq/seerrsense/commit/7d230fd87f70dcdd5dc8e4f125ab77326f4ae47e))
+
 ## [1.11.8](https://github.com/mctlhq/seerrsense/compare/1.11.7...1.11.8) (2026-10-31)
 
 

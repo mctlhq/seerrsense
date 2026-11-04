@@ -1,6 +1,6 @@
 {
   "name": "seerrsense",
-  "version": "1.11.8",
+  "version": "1.12.0",
   "description": "AI companion for Seerr — natural-language media discovery, resolution, and MCP automation.",
   "license": "ISC",
   "main": "index.js",
