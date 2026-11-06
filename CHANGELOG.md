@@ -1,5 +1,18 @@
 # Changelog
 
+## [1.14.0](https://github.com/mctlhq/seerrsense/compare/1.13.2...1.14.0) (2026-11-06)
+
+
+### Features
+
+* **mcp:** add smithery and glama registry manifests ([818fff1](https://github.com/mctlhq/seerrsense/commit/818fff13660120078a9359b4e9b5036080de06e5))
+* **mcp:** add smithery and glama registry manifests ([b2d207a](https://github.com/mctlhq/seerrsense/commit/b2d207a893549a3a4742882a39d1109889af52d1))
+
+
+### Bug Fixes
+
+* **mcp:** address review findings for smithery manifest and glama badge ([09d77a6](https://github.com/mctlhq/seerrsense/commit/09d77a6e2fc15384a32c74282491aabdd26cd9f7))
+
 ## [1.13.2](https://github.com/mctlhq/seerrsense/compare/1.13.1...1.13.2) (2026-11-06)
 
 
