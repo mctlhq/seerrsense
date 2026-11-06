@@ -1,5 +1,13 @@
 # Changelog
 
+## [1.13.1](https://github.com/mctlhq/seerrsense/compare/1.13.0...1.13.1) (2026-11-06)
+
+
+### Bug Fixes
+
+* correct privacy claims on analytics and backups ([84c972b](https://github.com/mctlhq/seerrsense/commit/84c972b13b88972a54322931c0cc5cdcf0bf00a0))
+* correct privacy claims on analytics and backups ([49b3e58](https://github.com/mctlhq/seerrsense/commit/49b3e588f564fb7ce4980f789e46e020d2bb6405))
+
 ## [1.13.0](https://github.com/mctlhq/seerrsense/compare/1.12.0...1.13.0) (2026-11-06)
 
 
