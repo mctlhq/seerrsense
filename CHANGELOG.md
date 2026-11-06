@@ -1,5 +1,14 @@
 # Changelog
 
+## [1.13.2](https://github.com/mctlhq/seerrsense/compare/1.13.1...1.13.2) (2026-11-06)
+
+
+### Bug Fixes
+
+* **branding:** align favicon with MCTL hexagon and add raster icon pack ([855ab29](https://github.com/mctlhq/seerrsense/commit/855ab2946b9c6778c28bfcdcf9999df511fc8273))
+* **branding:** align favicon with MCTL hexagon and add raster icon pack ([f0e3189](https://github.com/mctlhq/seerrsense/commit/f0e3189604219e2daca939cfc7652ccfca4561d1))
+* **branding:** scale apple-touch-icon properly and update documentation ([44d93d4](https://github.com/mctlhq/seerrsense/commit/44d93d430be81816473bbab67f27d089c5a3482c))
+
 ## [1.13.1](https://github.com/mctlhq/seerrsense/compare/1.13.0...1.13.1) (2026-11-06)
 
 
