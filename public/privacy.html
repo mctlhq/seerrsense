@@ -51,7 +51,7 @@
 <main class="page">
   <p class="eyebrow">Privacy</p>
   <h1>What SeerrSense does with your data</h1>
-  <p class="updated">Last updated 11 September 2026</p>
+  <p class="updated">Last updated 6 November 2026</p>
 
   <p>SeerrSense sits between an AI assistant and your own Overseerr or Jellyseerr. It holds as
     little as it can, and this page says plainly what that is. When it changes, the date above
@@ -89,9 +89,9 @@
           <td class="muted">7 days</td>
         </tr>
         <tr>
-          <td class="muted">Anonymous page views</td>
-          <td class="muted">To count visits and referrers via self-hosted Umami at stats.mctl.ai (no cookies, daily salted IP hash)</td>
-          <td class="muted">Aggregated permanently; visitor identifiers cycle daily</td>
+          <td class="muted">Page views: page address, referrer, browser, operating system, device type, screen size, language, and country, region and city derived from the IP address</td>
+          <td class="muted">To count visits via self-hosted Umami at stats.mctl.ai. It sets no cookies and does not store the IP address itself; the visitor identifier is computed from the IP address and browser details with a salt that rotates monthly</td>
+          <td class="muted">2 years</td>
         </tr>
       </tbody>
     </table>
@@ -121,6 +121,9 @@
       running an open-weights Qwen model. Only that phrase is sent, never your library, your
       account or your key, and the proposals are checked back against your Seerr before you see
       them.</li>
+    <li><strong>Through Cloudflare.</strong> All traffic to this site passes through Cloudflare,
+      including the account page where you enter your Seerr address and API key. Database
+      backups are stored in Cloudflare R2.</li>
     <li>Nowhere else. Nothing is sold, shared with advertisers, or used to train models.</li>
   </ul>
 
@@ -137,8 +140,9 @@
   <ul>
     <li>To remove everything at once, open <a href="/account">your account page</a> and press
       <strong>Delete my account</strong>. The attached Seerr and its key, every assistant's
-      sign-in, and the usage counters are deleted immediately, in one step, and nothing is
-      kept in a backup queue afterwards. One thing remains for up to eight hours: a note
+      sign-in, and the usage counters are deleted from the live database immediately, in one
+      step. Database backups keep them until they expire, after about 14 days. One more
+      thing remains for up to eight hours: a note
       that your account identifier was deleted at that moment, which is what keeps any
       browser still signed in on another device from acting on the account. It carries
       nothing else and expires on its own. No e-mail is needed.</li>
