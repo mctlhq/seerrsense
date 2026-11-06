@@ -196,7 +196,7 @@ describe("landing page", () => {
   });
 
   it("redirects a trailing slash on a page to the page, and nowhere else", async () => {
-    for (const page of ["/account", "/privacy", "/terms", "/support"]) {
+    for (const page of ["/account", "/privacy", "/terms", "/support", "/setup"]) {
       const response = await app.inject({ method: "GET", url: `${page}/` });
       expect(response.statusCode, page).toBe(301);
       expect(response.headers.location, page).toBe(page);
@@ -204,11 +204,11 @@ describe("landing page", () => {
       expect(withQuery.statusCode, page).toBe(301);
       expect(withQuery.headers.location, page).toBe(`${page}?a=1&b=2`);
     }
-    // Exactly those four paths, not the subtrees under them. A sibling of the
+    // Exactly those paths, not the subtrees under them. A sibling of the
     // redirect, asked for without a token and without an HTML Accept (so the
     // browser 404 exception does not apply), must meet the gate; this is what
-    // fails if the four ever become prefixes in PUBLIC_PREFIXES again.
-    for (const path of ["/account/x", "/privacy/anything", "/terms/2026", "/support/faq", "/account//"]) {
+    // fails if they ever become prefixes in PUBLIC_PREFIXES again.
+    for (const path of ["/account/x", "/privacy/anything", "/terms/2026", "/support/faq", "/setup/x", "/account//"]) {
       const response = await app.inject({ method: "GET", url: path, headers: { accept: "application/json" } });
       expect(response.statusCode, path).toBe(401);
       expect(response.headers["www-authenticate"], path).toContain("Bearer");
@@ -229,6 +229,110 @@ describe("landing page", () => {
     for (const path of ["/mcp", "/api/", "/oauth/", "/account"]) {
       expect(response.payload).toContain(`Disallow: ${path}`);
     }
+    expect(response.payload).toMatch(/^Sitemap: https:\/\/seerrsense\.mctl\.ai\/sitemap\.xml$/m);
+  });
+
+  describe("sitemap", () => {
+    const ORIGIN = "https://seerrsense.mctl.ai";
+    const locations = (xml: string) => [...xml.matchAll(/<loc>([^<]+)<\/loc>/g)].map((match) => match[1]);
+
+    it("answers GET and HEAD with public XML and no token", async () => {
+      const get = await app.inject({ method: "GET", url: "/sitemap.xml" });
+      expect(get.statusCode).toBe(200);
+      expect(get.headers["content-type"]).toContain("application/xml");
+      expect(get.payload.startsWith('<?xml version="1.0"')).toBe(true);
+      expect(get.payload).toContain('xmlns="http://www.sitemaps.org/schemas/sitemap/0.9"');
+      expect(get.payload.trimEnd().endsWith("</urlset>")).toBe(true);
+
+      const head = await app.inject({ method: "HEAD", url: "/sitemap.xml" });
+      expect(head.statusCode).toBe(200);
+      expect(head.headers["content-type"]).toContain("application/xml");
+      expect(head.payload).toBe("");
+    });
+
+    it("lists exactly the public pages, each one indexable and self-canonical", async () => {
+      const { payload } = await app.inject({ method: "GET", url: "/sitemap.xml" });
+      expect(locations(payload)).toEqual(["/", "/setup", "/support", "/privacy", "/terms"].map((path) => `${ORIGIN}${path}`));
+
+      for (const location of locations(payload)) {
+        const page = await app.inject({ method: "GET", url: location.slice(ORIGIN.length) });
+        expect(page.statusCode, location).toBe(200);
+        expect(page.headers["content-type"], location).toContain("text/html");
+        expect(page.payload, location).not.toMatch(/<meta name="robots"[^>]*noindex/);
+        expect(page.payload, location).toContain(`<link rel="canonical" href="${location}">`);
+      }
+    });
+
+    it("opens only its own exact path", async () => {
+      // A near match must not inherit the exemption: without an HTML Accept,
+      // these are undeclared paths, and an anonymous caller meets the gate.
+      for (const path of ["/sitemap.xml/", "/sitemap.xml/x", "/sitemap.xmlx", "/sitemap", "/setup/x", "/setupx"]) {
+        const response = await app.inject({ method: "GET", url: path, headers: { accept: "application/json" } });
+        expect(response.statusCode, path).toBe(401);
+        expect(response.headers["www-authenticate"], path).toContain("Bearer");
+      }
+      // GET and HEAD only: like the other public paths, it has no POST route.
+      expect((await app.inject({ method: "POST", url: "/sitemap.xml", payload: {} })).statusCode).toBe(404);
+    });
+  });
+
+  describe("setup guide", () => {
+    it("is complete in the server's HTML, with its own title and description", async () => {
+      const response = await app.inject({ method: "GET", url: "/setup" });
+      expect(response.statusCode).toBe(200);
+      expect(response.headers["content-type"]).toContain("text/html");
+      const { payload } = response;
+      expect(payload).toContain("<title>Seerr MCP setup: connect your media requests to an AI assistant</title>");
+      expect(payload).toMatch(/<meta name="description" content="[^"]*Overseerr or Jellyseerr[^"]*">/);
+      expect(payload.match(/<h1>/g)?.length).toBe(1);
+      // The outline, in the order a reader has to follow it.
+      const headings = [
+        "What runs where", "Before you start", "1. Add the connector", "2. Sign in with Google",
+        "3. Attach your Seerr", "4. Run a read-only check", "5. Resolve an imprecise title",
+        "6. Verify the candidate", "7. Confirm the request", "Troubleshooting", "Disconnect",
+      ].map((heading) => payload.indexOf(`<h2>${heading}</h2>`));
+      expect(headings.every((position) => position > -1)).toBe(true);
+      expect(headings).toEqual([...headings].sort((a, b) => a - b));
+      for (const tool of ["whoami", "search_media", "resolve_media", "get_media", "request_media"]) {
+        expect(payload, tool).toContain(`<code>${tool}</code>`);
+      }
+      for (const link of ["/account", "/privacy", "/support"]) {
+        expect(payload.slice(payload.indexOf("<main"), payload.indexOf("</main>")), link).toContain(`href="${link}"`);
+      }
+    });
+
+    it("publishes no credential and no real account", async () => {
+      const { payload } = await app.inject({ method: "GET", url: "/setup" });
+      for (const forbidden of [
+        "Authorization: Bearer", "SEERRSENSE_AUTH_TOKEN", "SEERR_API_KEY", "NEBIUS_API_KEY",
+        "CF_ACCESS_CLIENT_ID", "CF_ACCESS_CLIENT_SECRET", "gmail.com", "google:",
+      ]) {
+        expect(payload, forbidden).not.toContain(forbidden);
+      }
+      expect(payload).toContain("you@example.com");
+      expect(payload).toContain("https://seerr.example.com");
+    });
+
+    it("is linked from the landing and support pages", async () => {
+      for (const path of ["/", "/support"]) {
+        const { payload } = await app.inject({ method: "GET", url: path });
+        expect(payload, path).toContain('href="/setup"');
+      }
+    });
+
+    it("states the same client paths as the landing page", async () => {
+      const landing = (await app.inject({ method: "GET", url: "/" })).payload;
+      const guide = (await app.inject({ method: "GET", url: "/setup" })).payload;
+      const normal = (html: string) => html.replace(/\s+/g, " ");
+      for (const needle of [
+        "Customize → Connectors → + Add → Add custom connector",
+        "Add custom MCP server",
+        "claude mcp add --transport http seerrsense https://seerrsense.mctl.ai/mcp",
+      ]) {
+        expect(normal(landing), needle).toContain(needle);
+        expect(normal(guide), needle).toContain(needle);
+      }
+    });
   });
 
   it("gives every public page the same header, fonts, theme toggle and contact", async () => {
@@ -236,7 +340,7 @@ describe("landing page", () => {
     // toggle, a different set of links on each. One header and one footer now,
     // so a theme chosen on the landing page is what /account renders, and every
     // page reaches every other page.
-    const pages = ["/", "/account", "/privacy", "/terms", "/support"];
+    const pages = ["/", "/account", "/privacy", "/terms", "/support", "/setup"];
     for (const path of pages) {
       const { payload } = await app.inject({ method: "GET", url: path });
       expect(payload, path).toContain("fonts.googleapis.com/css2?family=Onest");
@@ -266,8 +370,8 @@ describe("landing page", () => {
     // email_verified is refused outright (src/auth/google.ts), so "verified"
     // is a condition, not a detail, and every page that states the rule must
     // say it the same way. Privacy deliberately does not state the rule, which
-    // is why this loop is four pages and the shared-shell loop above is five.
-    for (const path of ["/", "/account", "/terms", "/support"]) {
+    // which is why it is the one shared-shell page missing from this loop.
+    for (const path of ["/", "/account", "/terms", "/support", "/setup"]) {
       const { payload } = await app.inject({ method: "GET", url: path });
       expect(payload, path).toMatch(/On\s+this server, any(one with a)? Google\s+account (and|with) a verified\s+e-mail address can sign in/);
     }
@@ -300,9 +404,12 @@ describe("landing page", () => {
 
   it("describes the current ChatGPT path and names the model provider", async () => {
     const { payload } = await app.inject({ method: "GET", url: "/" });
-    // "Plugins" is the pre-2026 name; a reader following it finds nothing.
-    expect(payload).not.toContain("Plugins");
-    expect(payload).toContain("Apps &amp; Connectors");
+    // OpenAI's current path, per its help and developer pages on 2026-11-06.
+    // The earlier "Apps & Connectors" and "Developer mode" path is gone.
+    expect(payload).toContain("<em>Plugins</em>");
+    expect(payload).toContain("Add custom MCP server");
+    expect(payload).not.toContain("Apps &amp; Connectors");
+    expect(payload).not.toContain("Developer mode");
     expect(payload).toContain("claude mcp add --transport http seerrsense");
     // The sign-in rule belongs to the sign-in step, not to the connector step.
     const signIn = payload.slice(payload.indexOf("<strong>Sign in with Google.</strong>"), payload.indexOf("<strong>Attach your Seerr.</strong>"));
@@ -445,7 +552,7 @@ describe("landing page", () => {
     const { payload } = await app.inject({ method: "GET", url: "/" });
     expect(payload).toContain('id="setup"');
     for (const needle of [
-      "Add custom connector", "Developer mode",
+      "Add custom connector", "Add custom MCP server",
       "Settings, then General, then API Key",
     ]) {
       expect(payload, needle).toContain(needle);
@@ -458,7 +565,7 @@ describe("landing page", () => {
   });
 
   it("includes privacy-friendly Umami analytics on public pages and excludes it from account pages", async () => {
-    const publicPaths = ["/", "/privacy", "/terms", "/support"];
+    const publicPaths = ["/", "/privacy", "/terms", "/support", "/setup"];
     for (const path of publicPaths) {
       const { payload } = await app.inject({ method: "GET", url: path });
       expect(payload, path).toContain("https://stats.mctl.ai/insights.js");

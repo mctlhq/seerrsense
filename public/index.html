@@ -11,6 +11,7 @@
 <meta name="description" content="An MCP server in front of Overseerr or Jellyseerr. Ask an AI assistant for a film or series in plain language; SeerrSense resolves what you meant and requests it through your own Seerr.">
 <link rel="icon" type="image/svg+xml" href="/favicon.svg">
 <link rel="apple-touch-icon" href="/og.png">
+<link rel="canonical" href="https://seerrsense.mctl.ai/">
 <meta property="og:type" content="website">
 <meta property="og:site_name" content="SeerrSense">
 <meta property="og:title" content="SeerrSense — natural-language media requests for Overseerr and Jellyseerr">
@@ -139,18 +140,20 @@
 <section class="wrap" id="setup">
   <div class="section-head">
     <h2>Set it up</h2>
-    <p>Three steps, in order.</p>
+    <p>Three steps, in order. The <a href="/setup">full setup guide</a> adds a read-only check,
+      how to verify a candidate before requesting it, troubleshooting and how to disconnect.</p>
   </div>
-  <!-- Menu paths for claude.ai and ChatGPT verified against vendor documentation
-       on 2026-09-11; both products change their settings layout without notice,
-       so treat this as approximate if it has been a while. -->
+  <!-- Menu paths for claude.ai and ChatGPT compared with vendor documentation
+       on 2026-11-06; both products change their settings layout without notice,
+       so treat this as approximate if it has been a while. public/setup.html
+       repeats these paths, so change both together. -->
   <ol class="steps">
     <li><strong>Add the connector.</strong> Paste this endpoint into your assistant:
       <code class="mcp-url-slot">https://seerrsense.mctl.ai/mcp</code>
-      <br>In claude.ai: <em>Customize → Connectors → “+” → Add custom connector</em>, paste the URL,
+      <br>In claude.ai: <em>Customize → Connectors → + Add → Add custom connector</em>, paste the URL,
       then <em>Add</em>.
-      <br>In ChatGPT: <em>Settings → Apps &amp; Connectors → Advanced settings → Developer mode</em>,
-      then back in <em>Apps &amp; Connectors → Create</em>, paste the URL as the connector URL.
+      <br>In ChatGPT: <em>Plugins</em>, the plus button, <em>Add custom MCP server</em>, then paste the
+      URL. Availability depends on your plan and workspace.
       <br>In Claude Code or another MCP client, point it at the same URL over HTTP, for example
       <code>claude mcp add --transport http seerrsense https://seerrsense.mctl.ai/mcp</code>.
     </li>

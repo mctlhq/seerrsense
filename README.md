@@ -257,8 +257,11 @@ the key is already theirs.
 `/og.png`, `/icon-512.png` (the square, opaque listing icon the connector
 directories ask for: `favicon.svg` with a square background, rasterised at
 512×512 and flattened to RGB, since one directory rejects transparency) and
-`/assets/*`. Those paths, the health probes and the
-OAuth endpoints are the only ones served without a token.
+`/assets/*`, `/robots.txt` and `/sitemap.xml`. Those paths, the public pages,
+the health probes and the OAuth endpoints are served without a token.
+
+`/setup` is the full connection guide. `/sitemap.xml` is a static list of the
+public pages on the hosted origin; add a new public page there as well.
 
 `/privacy`, `/terms` and `/support` state what is stored, where it goes, what
 the operator can technically see, and where to write. Google requires the first

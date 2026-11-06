@@ -61,8 +61,10 @@ const PUBLIC_PREFIXES = [
   "/privacy",
   "/terms",
   "/support",
+  "/setup",
   "/icon-512.png",
   "/robots.txt",
+  "/sitemap.xml",
   // The browser has no token yet when it finishes its own PKCE exchange here;
   // the route is guarded by the authorization code and verifier it must present.
   "/account/session",
@@ -80,12 +82,12 @@ const PUBLIC_PREFIXES = [
 const SESSION_PREFIXES = ["/api/v1/account/", "/api/v1/account"];
 
 /**
- * The trailing-slash spellings of the four pages, which redirect to the page.
+ * The trailing-slash spellings of the pages, which redirect to the page.
  * Kept apart from PUBLIC_PREFIXES on purpose: there an entry ending in "/" is
  * a prefix, and "/account/" would have opened /account/** to the world. These
  * are matched exactly, so /account/anything still meets the gate.
  */
-const PUBLIC_REDIRECTS = ["/account/", "/privacy/", "/terms/", "/support/"];
+const PUBLIC_REDIRECTS = ["/account/", "/privacy/", "/terms/", "/support/", "/setup/"];
 
 /**
  * Kubelet probes hit these every few seconds and are almost half of all log
@@ -529,6 +531,9 @@ export function buildServer(
   fastify.get("/support", async (_request, reply) =>
     reply.type("text/html; charset=utf-8").sendFile("support.html"),
   );
+  fastify.get("/setup", async (_request, reply) =>
+    reply.type("text/html; charset=utf-8").sendFile("setup.html"),
+  );
   // The square, opaque listing icon the directories want; the SVG favicon has
   // rounded corners and transparency, which one of them rejects.
   fastify.get("/icon-512.png", async (_request, reply) => reply.type("image/png").sendFile("icon-512.png"));
@@ -547,13 +552,16 @@ export function buildServer(
   fastify.get("/robots.txt", async (_request, reply) =>
     reply.type("text/plain; charset=utf-8").sendFile("robots.txt"),
   );
-  // A typed trailing slash on a page is the page. Only these four: the
+  fastify.get("/sitemap.xml", async (_request, reply) =>
+    reply.type("application/xml; charset=utf-8").sendFile("sitemap.xml"),
+  );
+  // A typed trailing slash on a page is the page. Only these pages: the
   // endpoints under /mcp, /oauth/ and /api/ keep exact matching, and a
   // redirect there would be a second answer to a call that expects one.
   for (const withSlash of PUBLIC_REDIRECTS) {
     const page = withSlash.slice(0, -1);
     fastify.get(withSlash, async (request, reply) => {
-      // Carry the query across. Nothing under these four reads its own query
+      // Carry the query across. Nothing under these pages reads its own query
       // today, but a redirect that quietly drops it is the kind of thing a
       // later ?utm= or ?error= discovers the hard way.
       const queryAt = request.url.indexOf("?");
