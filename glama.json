@@ -1,0 +1,31 @@
+{
+  "$schema": "https://glama.ai/mcp/schemas/server.json",
+  "name": "seerrsense",
+  "description": "AI companion for Seerr — natural-language media discovery, resolution, and MCP automation for Overseerr and Jellyseerr.",
+  "maintainers": [
+    "mashkovd"
+  ],
+  "type": "mcp_server",
+  "status": "active",
+  "transport": [
+    "http",
+    "stdio"
+  ],
+  "keywords": [
+    "overseerr",
+    "jellyseerr",
+    "mcp",
+    "media-server",
+    "claude",
+    "chatgpt",
+    "radarr",
+    "sonarr",
+    "plex",
+    "jellyfin"
+  ],
+  "links": {
+    "website": "https://seerrsense.mctl.ai",
+    "setup": "https://seerrsense.mctl.ai/setup",
+    "repository": "https://github.com/mctlhq/seerrsense"
+  }
+}

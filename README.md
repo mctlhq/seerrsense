@@ -1,5 +1,9 @@
 # SeerrSense
 
+[![Smithery](https://smithery.ai/badge/@mctlhq/seerrsense)](https://smithery.ai/server/@mctlhq/seerrsense)
+[![Glama](https://img.shields.io/badge/Glama-MCP%20Server-blue)](https://glama.ai/mcp/servers?query=seerrsense)
+[![MCP](https://img.shields.io/badge/MCP-Protocol-purple)](https://modelcontextprotocol.io)
+
 > **Give Seerr some sense.**
 
 **AI companion for Seerr — natural-language media discovery, resolution, and MCP automation.**
@@ -90,7 +94,29 @@ progress is listed in the issue tracker.
 
 ## Quick Start
 
-Minimum settings for any of the three ways to run it: `SEERR_URL` (defaults to
+**Cloud Connector (Remote MCP — Recommended).**
+Connect your AI assistant directly to the hosted endpoint using OAuth 2.1:
+
+* Endpoint: `https://seerrsense.mctl.ai/mcp`
+* **Claude Desktop / Claude.ai:** *Customize → Connectors → Add custom connector*, paste `https://seerrsense.mctl.ai/mcp`
+* **Claude Code:**
+  ```sh
+  claude mcp add --transport http seerrsense https://seerrsense.mctl.ai/mcp
+  ```
+* **Cursor IDE (`.cursor/mcp.json`):**
+  ```json
+  {
+    "mcpServers": {
+      "seerrsense": {
+        "url": "https://seerrsense.mctl.ai/mcp"
+      }
+    }
+  }
+  ```
+* Setup Guide: [https://seerrsense.mctl.ai/setup](https://seerrsense.mctl.ai/setup)
+
+**Self-Hosted / Local Execution.**
+Minimum settings for running your own instance: `SEERR_URL` (defaults to
 `http://127.0.0.1:5055`), `SEERR_API_KEY` for the household Overseerr/Jellyseerr, and
 `SEERRSENSE_AUTH_TOKEN`, which `assertHttpConfig` requires only when the HTTP server
 is started — stdio mode has no network surface and does not need it.

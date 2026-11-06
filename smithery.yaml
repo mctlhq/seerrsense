@@ -1,0 +1,54 @@
+# Smithery MCP Server Configuration
+# https://smithery.ai/docs/config#smitheryyaml
+name: seerrsense
+description: AI companion for Seerr — natural-language media discovery, resolution, and MCP automation for Overseerr and Jellyseerr.
+author: MCTL
+repository: https://github.com/mctlhq/seerrsense
+license: ISC
+
+runtime: "container"
+build:
+  dockerfile: "Dockerfile"
+  dockerBuildPath: "."
+
+startCommand:
+  type: "http"
+  command: "node"
+  args:
+    - "dist/index.js"
+  env:
+    PORT: "8787"
+    SEERRSENSE_AUTH_TOKEN: "${SEERRSENSE_AUTH_TOKEN}"
+    SEERR_URL: "${SEERR_URL:-http://127.0.0.1:5055}"
+    SEERR_API_KEY: "${SEERR_API_KEY}"
+  http:
+    endpoint: "/mcp"
+
+configSchema:
+  type: "object"
+  required:
+    - SEERRSENSE_AUTH_TOKEN
+  properties:
+    SEERR_URL:
+      type: "string"
+      title: "Seerr URL"
+      description: "Address of your Overseerr or Jellyseerr instance (e.g. https://seerr.example.com)"
+      default: "http://127.0.0.1:5055"
+    SEERR_API_KEY:
+      type: "string"
+      title: "Seerr API Key"
+      description: "API key from your Overseerr or Jellyseerr Settings -> General"
+      writeOnly: true
+    SEERRSENSE_AUTH_TOKEN:
+      type: "string"
+      title: "Auth Token"
+      description: "Secret bearer token required to authenticate incoming requests to this SeerrSense instance"
+      writeOnly: true
+
+exampleConfig:
+  SEERR_URL: "https://seerr.example.com"
+  SEERR_API_KEY: "sample-seerr-api-key"
+  SEERRSENSE_AUTH_TOKEN: "sample-auth-token"
+
+documentation:
+  getting_started: "https://seerrsense.mctl.ai/setup"
