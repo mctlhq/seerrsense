@@ -468,7 +468,7 @@ describe("public web surface", () => {
   it("leaves the landing-page paths open and everything else closed", async () => {
     const app = await makeApp();
     // The web surface must never meet the token gate...
-    for (const path of ["/", "/favicon.svg", "/og.png", "/assets/tokens.css"]) {
+    for (const path of ["/", "/favicon.svg", "/favicon.ico", "/apple-touch-icon.png", "/og.png", "/assets/tokens.css"]) {
       const response = await app.inject({ method: "GET", url: path });
       expect(response.statusCode, path).toBe(200);
     }
