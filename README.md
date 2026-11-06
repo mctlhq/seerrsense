@@ -254,11 +254,11 @@ the key is already theirs.
 ## Web
 
 `GET /` serves a static landing page from `public/`, with `/favicon.svg`,
-`/og.png`, `/icon-512.png` (the square, opaque listing icon the connector
-directories ask for: `favicon.svg` with a square background, rasterised at
-512×512 and flattened to RGB, since one directory rejects transparency) and
-`/assets/*`, `/robots.txt` and `/sitemap.xml`. Those paths, the public pages,
-the health probes and the OAuth endpoints are served without a token.
+`/favicon.ico`, `/apple-touch-icon.png`, `/og.png`, `/icon-512.png` (the square,
+opaque listing icon the connector directories ask for: MCTL brand hexagon on dark
+background, rasterised at 512×512 and flattened to RGB, since one directory rejects
+transparency) and `/assets/*`, `/robots.txt` and `/sitemap.xml`. Those paths, the
+public pages, the health probes and the OAuth endpoints are served without a token.
 
 `/setup` is the full connection guide. `/sitemap.xml` is a static list of the
 public pages on the hosted origin; add a new public page there as well.
