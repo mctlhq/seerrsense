@@ -1,5 +1,13 @@
 # Changelog
 
+## [1.13.0](https://github.com/mctlhq/seerrsense/compare/1.12.0...1.13.0) (2026-11-06)
+
+
+### Features
+
+* **web:** add public setup guide and sitemap ([f8b579b](https://github.com/mctlhq/seerrsense/commit/f8b579b3833dc9849d4dd4825ac956f8f2aab9ac))
+* **web:** add public setup guide and sitemap ([fa79c37](https://github.com/mctlhq/seerrsense/commit/fa79c3746135af0de42c76fea4ee7b769c4207d0))
+
 ## [1.12.0](https://github.com/mctlhq/seerrsense/compare/1.11.8...1.12.0) (2026-11-04)
 
 
