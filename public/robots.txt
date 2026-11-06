@@ -6,3 +6,5 @@ Disallow: /account
 Disallow: /oauth/
 Disallow: /api/
 Disallow: /mcp
+
+Sitemap: https://seerrsense.mctl.ai/sitemap.xml

@@ -1,0 +1,210 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<!-- The theme choice is applied before the first paint, from localStorage,
+     so a visitor who chose light on a dark-preferring system never sees the
+     dark page flash on a navigation. site.js (end of body) does the rest. -->
+<script>try{var t=localStorage.getItem("seerrsense-theme");if(t==="light"||t==="dark")document.documentElement.setAttribute("data-theme",t)}catch(e){}</script>
+<title>Seerr MCP setup: connect your media requests to an AI assistant</title>
+<meta name="description" content="Connect Overseerr or Jellyseerr to Claude, ChatGPT or another MCP client with SeerrSense: attach your Seerr, run a read-only check, then confirm your first request.">
+<link rel="canonical" href="https://seerrsense.mctl.ai/setup">
+<link rel="icon" type="image/svg+xml" href="/favicon.svg">
+<link rel="apple-touch-icon" href="/og.png">
+<meta property="og:type" content="article">
+<meta property="og:site_name" content="SeerrSense">
+<meta property="og:title" content="Seerr MCP setup: connect your media requests to an AI assistant">
+<meta property="og:description" content="Attach your Overseerr or Jellyseerr, run a read-only check, then confirm your first request from an AI assistant.">
+<meta property="og:url" content="https://seerrsense.mctl.ai/setup">
+<meta property="og:image" content="https://seerrsense.mctl.ai/og.png">
+<meta name="twitter:card" content="summary_large_image">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Onest:wght@400;500;600&family=JetBrains+Mono:wght@400;500;600&display=swap">
+<!-- The design tokens are vendored from a pinned @mctlhq/css by
+     scripts/sync-tokens.mjs, not fetched from the unversioned CDN sheet: that
+     URL always serves whatever is deployed, so a page could change without a
+     commit. Nothing here depends on a third-party origin. -->
+<link rel="stylesheet" href="/assets/tokens.css">
+<link rel="stylesheet" href="/assets/components.css">
+</head>
+<body>
+<header class="wrap topbar">
+  <a class="brand" href="/">
+    <svg class="brand-mark" viewBox="0 0 32 32" aria-hidden="true">
+      <circle cx="14" cy="14" r="7.5" fill="none" stroke="currentColor" stroke-width="2.5" style="color: var(--accent)"/>
+      <path d="M19.5 19.5 L26 26" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" style="color: var(--accent)"/>
+      <circle cx="14" cy="14" r="2.5" fill="currentColor" style="color: var(--accent)"/>
+    </svg>
+    SeerrSense
+  </a>
+  <nav class="topbar-links">
+    <a href="/account">Account</a>
+    <a href="/support">Support</a>
+    <a href="https://github.com/mctlhq/seerrsense">GitHub</a>
+    <button class="theme-toggle" id="theme-toggle" type="button" hidden aria-label="Switch between light and dark">
+      <svg class="icon-moon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
+        <path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8z"/>
+      </svg>
+      <svg class="icon-sun" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true">
+        <circle cx="12" cy="12" r="4"/>
+        <path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/>
+      </svg>
+    </button>
+  </nav>
+</header>
+
+<main class="page">
+  <p class="eyebrow">Setup guide</p>
+  <h1>Seerr MCP setup</h1>
+
+  <p>This guide connects an Overseerr or Jellyseerr you already run to an AI assistant, using
+    SeerrSense as the MCP server in between. By the end, the assistant can look titles up on your
+    server, work out which one you meant from a description, and file a request after you confirm
+    it.</p>
+
+  <h2>What runs where</h2>
+  <ul>
+    <li><strong>On your Seerr:</strong> the catalogue, availability, quotas, approvals,
+      notifications and the request history. SeerrSense does not replace any of it, and every
+      request is filed through your instance.</li>
+    <li><strong>On this server:</strong> the MCP endpoint, your sign-in, and the address and API
+      key of your Seerr, with the key encrypted before it is stored. The
+      <a href="/privacy">privacy page</a> says what is kept, for how long, and what the operator
+      can technically see.</li>
+    <li><strong>At the model provider:</strong> only the phrase you typed, and only when ordinary
+      search finds nothing. The model proposes titles, people and years. It never returns provider
+      ids, and each candidate is checked against your Seerr before you see it.</li>
+  </ul>
+
+  <h2>Before you start</h2>
+  <ul>
+    <li>An Overseerr or Jellyseerr with an address reachable from the internet. Private and
+      internal addresses are refused.</li>
+    <li>Its API key, from <em>Settings, then General, then API Key</em> in your Seerr. If the
+      instance sits behind Cloudflare Access, you also need a service token.</li>
+    <li>A Google account. On this server, any Google account with a verified
+      e-mail address can sign in.</li>
+    <li>An assistant that can use a remote MCP server: Claude, ChatGPT, or another MCP client.</li>
+  </ul>
+
+  <h2>1. Add the connector</h2>
+  <p>The endpoint is the same in every client:</p>
+  <div class="endpoint">
+    <span class="label">Endpoint</span>
+    <code class="mcp-url-slot">https://seerrsense.mctl.ai/mcp</code>
+  </div>
+  <!-- Claude and ChatGPT paths compared with the vendor pages linked below on
+       2026-11-06. Both products change their settings layout without notice, so
+       the vendor links stay next to the paths. -->
+  <ul>
+    <li><strong>claude.ai, Pro or Max:</strong> <em>Customize → Connectors → + Add → Add custom
+      connector</em>, then paste the endpoint. On Team and Enterprise, an owner adds it under
+      <em>Organization settings → Connectors</em>, then members press <em>Connect</em> under
+      <em>Customize → Connectors</em>.
+      <a href="https://support.claude.com/en/articles/11175166-get-started-with-custom-connectors-using-remote-mcp">Anthropic's guide</a>.</li>
+    <li><strong>ChatGPT:</strong> open <em>Plugins</em>, press the plus button, choose <em>Add
+      custom MCP server</em>, enter a name and the endpoint, and set authentication to OAuth.
+      Availability depends on your plan and workspace: OpenAI lists some plans as limited to
+      read and fetch actions, which would leave out <code>request_media</code>.
+      <a href="https://help.openai.com/en/articles/12584461-developer-mode-and-mcp-apps-in-chatgpt">OpenAI's guide</a>.</li>
+    <li><strong>Claude Code:</strong>
+      <code>claude mcp add --transport http seerrsense https://seerrsense.mctl.ai/mcp</code></li>
+  </ul>
+
+  <h2>2. Sign in with Google</h2>
+  <p>Signing in starts on the first <em>Connect</em>. One consent screen names the client and what it
+    is being granted: <code>seerr:read</code> for the lookups and <code>seerr:request</code> for
+    filing requests. There is no token to copy.</p>
+
+  <h2>3. Attach your Seerr</h2>
+  <p>Open <a href="/account">/account</a> and enter your Seerr address, such as
+    <code>https://seerr.example.com</code>, and its API key. For an instance behind Cloudflare Access,
+    add its service token in the <em>CF-Access-Client-Id</em> and
+    <em>CF-Access-Client-Secret</em> fields. <em>Test and save</em> tries the credentials against
+    your instance before storing them.</p>
+
+  <h2>4. Run a read-only check</h2>
+  <p>Before requesting anything, ask your assistant:</p>
+  <pre><code>Use SeerrSense to check who I am,
+then tell me whether Arrival is on my server.</code></pre>
+  <p>This calls <code>whoami</code> and <code>search_media</code>, and neither can change anything.
+    In the <code>whoami</code> result, <code>connected</code> should be <code>true</code>:</p>
+  <pre><code>{
+  "email": "you@example.com",
+  "source": "own",
+  "connected": true
+}</code></pre>
+  <p>Each match from <code>search_media</code> carries a TMDB id and a status from your Seerr, such as
+    <code>AVAILABLE</code>, <code>PENDING</code> or <code>UNKNOWN</code>. <code>UNKNOWN</code> means
+    your Seerr has no record of the title yet.</p>
+
+  <h2>5. Resolve an imprecise title</h2>
+  <p>When you remember the story but not the name, describe it:</p>
+  <pre><code>Find the Danish political drama
+with the female prime minister.</code></pre>
+  <p><code>resolve_media</code> tries your Seerr's search first and uses the language model only if
+    that fails. It returns one candidate, with a confidence score and the reason for the match.
+    The response below is shortened:</p>
+  <pre><code>{
+  "candidate": {
+    "title": "Borgen",
+    "mediaType": "tv",
+    "year": 2010,
+    "providerId": 42445,
+    "status": "UNKNOWN"
+  },
+  "confidence": 0.85,
+  "matchReason": "title inferred from the description"
+}</code></pre>
+
+  <h2>6. Verify the candidate</h2>
+  <p>Check the title and year against what you had in mind. A high score is the resolver's own
+    estimate, not a guarantee. To see the current record for that id, including whether a request is
+    already waiting for approval, ask:</p>
+  <pre><code>What is the status of that one on my Seerr?</code></pre>
+  <p>That calls <code>get_media</code>, which is also read-only.</p>
+
+  <h2>7. Confirm the request</h2>
+  <pre><code>Request season 1 of that.</code></pre>
+  <p><code>request_media</code> is the only tool that writes, and it needs the
+    <code>seerr:request</code> scope. It is declared as a write so that your assistant can ask you to
+    confirm first. The server then re-reads the record and refuses a title that is already available,
+    pending or blocklisted. After that, your Seerr's own quotas and approval rules apply.</p>
+
+  <h2>Troubleshooting</h2>
+  <ul>
+    <li><strong>“No Seerr is connected to this account yet.”</strong> Finish step 3 with the same
+      Google account you used in step 2.</li>
+    <li><strong>“Could not reach your Seerr.”</strong> Check that the address opens from outside your
+      network, and that any Cloudflare Access service token is entered.</li>
+    <li><strong>Sign-in does not finish.</strong> Remove the connector, add it again, and pick the
+      Google account you meant.</li>
+    <li><strong>The assistant shows old tools.</strong> Clients cache the tool list. Start a new
+      conversation, or remove and re-add the connector.</li>
+  </ul>
+  <p>For anything else, see <a href="/support">Support</a>.</p>
+
+  <h2>Disconnect</h2>
+  <ul>
+    <li><strong>Keep the account, detach the Seerr:</strong> press <em>Disconnect</em> on
+      <a href="/account">/account</a>. The stored address and key are deleted immediately.</li>
+    <li><strong>Remove everything:</strong> press <em>Delete my account</em> on the same page.</li>
+    <li><strong>Remove the connector in your assistant as well,</strong> so that it stops holding tokens
+      for this server.</li>
+  </ul>
+  <p>To replace or revoke the key itself, generate a new API key in your Seerr.</p>
+</main>
+
+<footer class="wrap">
+  <div class="footer-row">
+    <span>SeerrSense — part of the <a href="https://mctl.ai">mctl</a> platform.</span>
+    <span><a href="/privacy">Privacy</a> · <a href="/terms">Terms</a> · <a href="/support">Support</a> · <a href="https://github.com/mctlhq/seerrsense">Source and self-hosting</a></span>
+  </div>
+</footer>
+
+<script defer src="https://stats.mctl.ai/insights.js" data-website-id="5ee11000-8b07-4d27-98e6-0b611eeaa707" data-domains="seerrsense.mctl.ai"></script>
+<script src="/assets/site.js"></script>
+</body>
+</html>
