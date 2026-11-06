@@ -1,7 +1,6 @@
 # Smithery MCP Server Configuration
 # https://smithery.ai/docs/config#smitheryyaml
 name: seerrsense
-version: 1.13.1
 description: AI companion for Seerr — natural-language media discovery, resolution, and MCP automation for Overseerr and Jellyseerr.
 author: MCTL
 repository: https://github.com/mctlhq/seerrsense
@@ -27,6 +26,8 @@ startCommand:
 
 configSchema:
   type: "object"
+  required:
+    - SEERRSENSE_AUTH_TOKEN
   properties:
     SEERR_URL:
       type: "string"
@@ -37,11 +38,12 @@ configSchema:
       type: "string"
       title: "Seerr API Key"
       description: "API key from your Overseerr or Jellyseerr Settings -> General"
+      writeOnly: true
     SEERRSENSE_AUTH_TOKEN:
       type: "string"
       title: "Auth Token"
-      description: "Secret token for securing your local SeerrSense HTTP endpoint"
-      default: "seerrsense-local-secret"
+      description: "Secret bearer token required to authenticate incoming requests to this SeerrSense instance"
+      writeOnly: true
 
 exampleConfig:
   SEERR_URL: "https://seerr.example.com"

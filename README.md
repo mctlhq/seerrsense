@@ -1,7 +1,7 @@
 # SeerrSense
 
 [![Smithery](https://smithery.ai/badge/@mctlhq/seerrsense)](https://smithery.ai/server/@mctlhq/seerrsense)
-[![Glama](https://img.shields.io/badge/Glama-MCP%20Server-blue)](https://glama.ai/mcp/servers)
+[![Glama](https://img.shields.io/badge/Glama-MCP%20Server-blue)](https://glama.ai/mcp/servers?query=seerrsense)
 [![MCP](https://img.shields.io/badge/MCP-Protocol-purple)](https://modelcontextprotocol.io)
 
 > **Give Seerr some sense.**
