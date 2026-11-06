@@ -51,6 +51,7 @@ const PUBLIC_PREFIXES = [
   "/",
   "/favicon.svg",
   "/favicon.ico",
+  "/apple-touch-icon.png",
   "/og.png",
   "/assets/",
   // The account page and the browser leg of its sign-in. The page itself
@@ -548,6 +549,8 @@ export function buildServer(
     );
   }
   fastify.get("/favicon.svg", async (_request, reply) => reply.type("image/svg+xml").sendFile("favicon.svg"));
+  fastify.get("/favicon.ico", async (_request, reply) => reply.type("image/x-icon").sendFile("favicon.ico"));
+  fastify.get("/apple-touch-icon.png", async (_request, reply) => reply.type("image/png").sendFile("apple-touch-icon.png"));
   fastify.get("/og.png", async (_request, reply) => reply.type("image/png").sendFile("og.png"));
   fastify.get("/robots.txt", async (_request, reply) =>
     reply.type("text/plain; charset=utf-8").sendFile("robots.txt"),

@@ -50,6 +50,8 @@ describe("landing page", () => {
   it("serves the icon, the card image and the stylesheets", async () => {
     for (const [path, type] of [
       ["/favicon.svg", "image/svg+xml"],
+      ["/favicon.ico", "icon"],
+      ["/apple-touch-icon.png", "image/png"],
       ["/og.png", "image/png"],
       ["/assets/tokens.css", "text/css"],
       ["/assets/components.css", "text/css"],
