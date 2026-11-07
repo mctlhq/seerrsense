@@ -34,7 +34,7 @@ jobs:
       # reads exactly like an exhausted quota and is not one. The other
       # three are carried from the organisation default so dependabot and
       # release-please PRs are reviewed rather than left unmergeable.
-      allowed-bots: "mctl-claude-remote,github-actions,dependabot,mctl-agents"
+      allowed-bots: "mctl-claude-remote,github-actions,dependabot,mctl-agents,mctl-codex"
       # Everything that decides who a caller is, or what is done with the
       # credentials they attach, lives under these two directories.
       sensitive-paths: '^src/(auth|api)/'
