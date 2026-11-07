@@ -11,6 +11,9 @@ permissions:
 jobs:
   release-please:
     runs-on: ubuntu-latest
+    outputs:
+      release_created: ${{ steps.release.outputs.release_created }}
+      tag_name: ${{ steps.release.outputs.tag_name }}
     steps:
       # The default GITHUB_TOKEN cannot open the release PR: "Allow GitHub
       # Actions to create and approve pull requests" is off at the org level,
@@ -36,31 +39,37 @@ jobs:
           config-file: release-please-config.json
           manifest-file: .release-please-manifest.json
 
-      # Deploy the way every other onboarded mctlhq service does: hand the tag
-      # to mctl-gitops, which builds ghcr.io/mctlhq/seerrsense from this repo's
-      # Dockerfile and commits the new image.tag to
-      # platform-gitops/services/labs/seerrsense/values.yaml for ArgoCD. No
-      # values_path override: that default path is already the right one.
-      #
-      # mctl-agents is the backend-only App, deliberately not MCTL App
-      # (APP_CLIENT_ID), which is the customer-installed App being narrowed to
-      # read-only permissions (mctlhq/mctl-gitops#761); actions:write on
-      # mctl-gitops has to live on the internal App instead.
+  # Deploy the way every other onboarded mctlhq service does: hand the tag
+  # to mctl-gitops, which builds ghcr.io/mctlhq/seerrsense from this repo's
+  # Dockerfile and commits the new image.tag to
+  # platform-gitops/services/labs/seerrsense/values.yaml for ArgoCD. No
+  # values_path override: that default path is already the right one.
+  #
+  # Separate job so the dispatch key lives only in the main-only
+  # app-dispatch environment and the release-please job above never sees it.
+  # The mctl-gitops-dispatch App has actions:write on mctl-gitops only.
+  dispatch:
+    needs: release-please
+    if: ${{ github.ref == 'refs/heads/main' && needs.release-please.outputs.release_created == 'true' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions: {}
+    environment: app-dispatch
+    steps:
       - name: Generate Platform App token
-        if: ${{ steps.release.outputs.release_created == 'true' }}
         id: app
         uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
         with:
-          client-id: ${{ vars.AGENTS_APP_CLIENT_ID }}
-          private-key: ${{ secrets.AGENTS_APP_PRIVATE_KEY }}
+          client-id: ${{ vars.DISPATCH_APP_CLIENT_ID }}
+          private-key: ${{ secrets.DISPATCH_APP_PRIVATE_KEY }}
           owner: mctlhq
           repositories: mctl-gitops
+          permission-actions: write
 
       - name: Dispatch centralized release-deploy
-        if: ${{ steps.release.outputs.release_created == 'true' }}
         env:
           GH_TOKEN: ${{ steps.app.outputs.token }}
-          TAG: ${{ steps.release.outputs.tag_name }}
+          TAG: ${{ needs.release-please.outputs.tag_name }}
         run: |
           gh workflow run release-deploy.yaml \
             --repo mctlhq/mctl-gitops \
