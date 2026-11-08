@@ -1,5 +1,21 @@
 # Changelog
 
+## [1.14.0](https://github.com/mctlhq/seerrsense/compare/1.13.2...1.14.0) (2026-11-08)
+
+
+### Features
+
+* **mcp:** add smithery and glama registry manifests ([818fff1](https://github.com/mctlhq/seerrsense/commit/818fff13660120078a9359b4e9b5036080de06e5))
+* **mcp:** add smithery and glama registry manifests ([b2d207a](https://github.com/mctlhq/seerrsense/commit/b2d207a893549a3a4742882a39d1109889af52d1))
+* move the site header to the shared mctl-design shell (0.20.1) ([6aeaebe](https://github.com/mctlhq/seerrsense/commit/6aeaebe0c31f6db289c5af4efeef4cb439a0fb1b))
+* move the site header to the shared mctl-design shell (0.20.1) ([46392cf](https://github.com/mctlhq/seerrsense/commit/46392cff077dc20f383519d7060e9b094d2decb6))
+
+
+### Bug Fixes
+
+* **mcp:** address review findings for smithery manifest and glama badge ([09d77a6](https://github.com/mctlhq/seerrsense/commit/09d77a6e2fc15384a32c74282491aabdd26cd9f7))
+* win the burger margin against site.css, cover the 404 page ([3dac480](https://github.com/mctlhq/seerrsense/commit/3dac480e2ae5a9464e5d357d13b886e5e5fec49d))
+
 ## [1.13.2](https://github.com/mctlhq/seerrsense/compare/1.13.1...1.13.2) (2026-11-06)
 
 
