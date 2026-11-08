@@ -1,5 +1,13 @@
 # Changelog
 
+## [1.14.1](https://github.com/mctlhq/seerrsense/compare/1.14.0...1.14.1) (2026-11-08)
+
+
+### Bug Fixes
+
+* ship mctl-design 0.20.2 header spacing ([d8f56ae](https://github.com/mctlhq/seerrsense/commit/d8f56aee71fa9f2594531fe4bfcee9e5bcca10a6))
+* ship mctl-design 0.20.2 header spacing ([d6b3998](https://github.com/mctlhq/seerrsense/commit/d6b3998a77e283d764c60af9698840d42a479b57))
+
 ## [1.14.0](https://github.com/mctlhq/seerrsense/compare/1.13.2...1.14.0) (2026-11-08)
 
 
