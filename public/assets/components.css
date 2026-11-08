@@ -50,28 +50,8 @@ pre {
    The header itself is the shared shell (assets/site.css, vendored from
    ui.mctl.ai by scripts/sync-tokens.mjs). Only what this site adds is here. */
 
-.mctl-site-brand {
-  white-space: nowrap;
-}
-
-.mctl-site-burger {
-  flex: none;
-}
-
-/* Below 768px the nav is the drawer: the theme toggle stays in the bar,
-   pushed to the right edge next to the burger. */
-@media (max-width: 767px) {
-  .mctl-site-header__actions {
-    margin-left: auto;
-  }
-
-  /* site.css sets margin-left:auto on the burger through a :has() selector
-     (specificity 0,3,0), so a bare .mctl-site-burger here would lose. Repeat
-     the selector; this sheet loads after site.css, so a tie goes to it. */
-  .mctl-site-header--app:has(.mctl-site-burger) .mctl-site-burger {
-    margin-left: 0;
-  }
-}
+/* Brand nowrap, burger flex:none and the actions/burger pair at the right
+   edge come from site.css 0.20.2. */
 
 .theme-toggle {
   display: inline-flex;
