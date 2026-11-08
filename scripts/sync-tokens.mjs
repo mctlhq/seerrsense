@@ -35,7 +35,7 @@
  */
 import { readFileSync, writeFileSync } from "node:fs";
 
-const VERSION = "0.20.1";
+const VERSION = "0.20.2";
 const SOURCE = `https://ui.mctl.ai/${VERSION}/mctl.css`;
 const OUTPUT = new URL("../public/assets/tokens.css", import.meta.url).pathname;
 // The shared public-site shell (header, burger drawer, brand mark), vendored
