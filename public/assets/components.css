@@ -65,7 +65,10 @@ pre {
     margin-left: auto;
   }
 
-  .mctl-site-burger {
+  /* site.css sets margin-left:auto on the burger through a :has() selector
+     (specificity 0,3,0), so a bare .mctl-site-burger here would lose. Repeat
+     the selector; this sheet loads after site.css, so a tie goes to it. */
+  .mctl-site-header--app:has(.mctl-site-burger) .mctl-site-burger {
     margin-left: 0;
   }
 }

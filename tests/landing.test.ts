@@ -93,6 +93,16 @@ describe("landing page", () => {
       );
       expect(payload, path).not.toContain("topbar");
     }
+    // The 404 page carries the same header and sheet.
+    const missing = await app.inject({
+      method: "GET",
+      url: "/does-not-exist",
+      headers: { accept: "text/html" },
+    });
+    expect(missing.statusCode).toBe(404);
+    expect(missing.payload).toContain('href="/assets/site.css"');
+    expect(missing.payload).toContain('class="mctl-site-header mctl-site-header--app"');
+    expect(missing.payload).not.toContain("topbar");
   });
 
   it("depends on no third-party stylesheet at all", async () => {
