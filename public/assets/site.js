@@ -27,6 +27,49 @@
     });
   }
 
+  // Mobile navigation drawer. site.css owns the look (data-nav-open on the
+  // header opens it below 768px); the behaviour is here: toggle, Escape, click
+  // outside, link click, resize past the breakpoint, focus back to the burger.
+  var navHeader = document.querySelector(".mctl-site-header");
+  var navBurger = document.getElementById("nav-burger");
+  var navList = document.getElementById("site-nav");
+  if (navHeader && navBurger && navList) {
+    var closeNav = function (returnFocus) {
+      if (!navHeader.hasAttribute("data-nav-open")) return;
+      navHeader.removeAttribute("data-nav-open");
+      navBurger.setAttribute("aria-expanded", "false");
+      if (returnFocus) navBurger.focus();
+    };
+    navBurger.addEventListener("click", function () {
+      if (navHeader.hasAttribute("data-nav-open")) {
+        closeNav(false);
+      } else {
+        navHeader.setAttribute("data-nav-open", "");
+        navBurger.setAttribute("aria-expanded", "true");
+      }
+    });
+    document.addEventListener("keydown", function (event) {
+      if (event.key === "Escape") closeNav(true);
+    });
+    document.addEventListener("pointerdown", function (event) {
+      if (!navHeader.hasAttribute("data-nav-open")) return;
+      if (navList.contains(event.target) || navBurger.contains(event.target)) return;
+      closeNav(false);
+    });
+    navList.addEventListener("click", function (event) {
+      if (event.target.closest && event.target.closest("a")) closeNav(false);
+    });
+    if (window.matchMedia) {
+      var wideQuery = window.matchMedia("(min-width: 768px)");
+      var onWide = function (event) {
+        if (event.matches) closeNav(false);
+      };
+      // Safari before 14 only has the deprecated addListener.
+      if (wideQuery.addEventListener) wideQuery.addEventListener("change", onWide);
+      else if (wideQuery.addListener) wideQuery.addListener(onWide);
+    }
+  }
+
   // The endpoint is whatever host this page was served from, so promoting a
   // domain needs no change here.
   var url = window.location.origin + "/mcp";
