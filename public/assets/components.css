@@ -46,44 +46,31 @@ pre {
   padding-inline: 24px;
 }
 
-/* ── top bar ─────────────────────────────────────────────────────────── */
+/* ── site header ─────────────────────────────────────────────────────
+   The header itself is the shared shell (assets/site.css, vendored from
+   ui.mctl.ai by scripts/sync-tokens.mjs). Only what this site adds is here. */
 
-.topbar {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 16px;
-  padding-block: 20px;
-  border-bottom: 1px solid var(--surface-line);
+.mctl-site-brand {
+  white-space: nowrap;
 }
 
-.brand {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  font-weight: 600;
-  letter-spacing: -0.01em;
-  color: var(--surface-fg);
-}
-
-.brand-mark {
-  width: 26px;
-  height: 26px;
+.mctl-site-burger {
   flex: none;
 }
 
-.topbar-links {
-  display: flex;
-  align-items: center;
-  gap: 20px;
-  font-size: 14px;
-}
+/* Below 768px the nav is the drawer: the theme toggle stays in the bar,
+   pushed to the right edge next to the burger. */
+@media (max-width: 767px) {
+  .mctl-site-header__actions {
+    margin-left: auto;
+  }
 
-.topbar-links a {
-  color: var(--surface-fg-muted);
-}
-.topbar-links a:hover {
-  color: var(--surface-fg);
+  /* site.css sets margin-left:auto on the burger through a :has() selector
+     (specificity 0,3,0), so a bare .mctl-site-burger here would lose. Repeat
+     the selector; this sheet loads after site.css, so a tie goes to it. */
+  .mctl-site-header--app:has(.mctl-site-burger) .mctl-site-burger {
+    margin-left: 0;
+  }
 }
 
 .theme-toggle {
@@ -487,15 +474,6 @@ footer a {
   }
   .hero {
     padding-block-start: 52px;
-  }
-  /* Three links and the toggle fit beside the brand down to about 370px;
-     below that the row may wrap rather than push the page sideways. */
-  .topbar-links {
-    gap: 10px;
-    font-size: 13px;
-    flex-wrap: wrap;
-    justify-content: flex-end;
-    row-gap: 6px;
   }
   .cta-row .btn {
     flex: 1 1 100%;
