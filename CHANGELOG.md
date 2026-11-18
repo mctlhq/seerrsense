@@ -1,5 +1,13 @@
 # Changelog
 
+## [1.14.4](https://github.com/mctlhq/seerrsense/compare/1.14.3...1.14.4) (2026-11-18)
+
+
+### Bug Fixes
+
+* **seo:** version the og:image URL on /setup like the other pages ([2d7b5be](https://github.com/mctlhq/seerrsense/commit/2d7b5be2c3d5195fa1e7817daff189ec0bf86638))
+* **seo:** version the og:image URL on /setup like the other pages ([9a097bd](https://github.com/mctlhq/seerrsense/commit/9a097bd4be700450a3b19f3a2ae3d853f86b58c8))
+
 ## [1.14.3](https://github.com/mctlhq/seerrsense/compare/1.14.2...1.14.3) (2026-11-18)
 
 
