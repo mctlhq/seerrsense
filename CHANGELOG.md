@@ -1,5 +1,13 @@
 # Changelog
 
+## [1.14.3](https://github.com/mctlhq/seerrsense/compare/1.14.2...1.14.3) (2026-11-18)
+
+
+### Bug Fixes
+
+* **seo:** add structured data, social tags and security headers ([51f0dfe](https://github.com/mctlhq/seerrsense/commit/51f0dfedb49c94c936984f4268428d1f6e1550ca))
+* **seo:** add structured data, social tags and security headers ([62f9582](https://github.com/mctlhq/seerrsense/commit/62f9582bceaf0c107cf2fb5c2345b32102d44c3a))
+
 ## [1.14.2](https://github.com/mctlhq/seerrsense/compare/1.14.1...1.14.2) (2026-11-18)
 
 
