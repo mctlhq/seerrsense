@@ -1,5 +1,13 @@
 # Changelog
 
+## [1.14.2](https://github.com/mctlhq/seerrsense/compare/1.14.1...1.14.2) (2026-11-18)
+
+
+### Bug Fixes
+
+* **web:** trim home meta description to under 160 chars ([a345b9f](https://github.com/mctlhq/seerrsense/commit/a345b9f9e1c93c851976fe5f2d22b696ee7b5f14))
+* **web:** trim home meta description to under 160 chars ([aef09e4](https://github.com/mctlhq/seerrsense/commit/aef09e4690ef0c1679b45f6a2ca1e6597ebeaafa))
+
 ## [1.14.1](https://github.com/mctlhq/seerrsense/compare/1.14.0...1.14.1) (2026-11-08)
 
 
