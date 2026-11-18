@@ -317,6 +317,18 @@ export function buildServer(
   fastify.register(rateLimit, { global: false, hook: "preHandler" });
   const limits = rateLimitSettings();
 
+  // Baseline browser protections on every response, including refusals and
+  // static files. Set on the root instance so nothing below can skip them.
+  // A Content-Security-Policy is deliberately not part of this: the pages use
+  // inline scripts and a third-party analytics script, so one needs its own
+  // change with hashes or nonces rather than a guess here.
+  fastify.addHook("onSend", async (_request, reply) => {
+    reply.header("strict-transport-security", "max-age=31536000; includeSubDomains");
+    reply.header("x-content-type-options", "nosniff");
+    reply.header("referrer-policy", "strict-origin-when-cross-origin");
+    reply.header("x-frame-options", "DENY");
+  });
+
   // The route-level limiters above run at preHandler, i.e. AFTER the bearer
   // gate below, so a request that fails authentication short-circuits with 401
   // and is never metered at all — an unbounded number of guesses per second at
